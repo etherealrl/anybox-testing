@@ -5,6 +5,8 @@ version = 4
 [[package]]
 name = "anybox-rs"
 version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ea5220c5acccc974c47241c84e2b0f6ba6f43154bc0014eee210e7e69630284"
 dependencies = [
  "libc",
  "medius",
