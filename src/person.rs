@@ -76,10 +76,22 @@ impl Person {
         self.read()
     }
 
-    /// the terminal's bell, a timed part starts on it
-    pub fn beep(&self) {
-        print!("\x07");
-        let _ = io::stdout().flush();
+    /// a timed part starts here, one high beep. it says so on screen too, for a PC without sound
+    pub fn go(&self) {
+        self.say(">>> NOW");
+        if !self.scripted {
+            beep(1500, 300);
+        }
+    }
+
+    /// and ends here, two low beeps
+    pub fn stop(&self) {
+        self.say(">>> stop, done");
+        if !self.scripted {
+            beep(500, 250);
+            std::thread::sleep(Duration::from_millis(100));
+            beep(500, 250);
+        }
     }
 
     pub fn stopped(&self) -> Run<()> {
@@ -107,4 +119,21 @@ impl Person {
         }
         Ok(())
     }
+}
+
+// the terminal's bell is silent in a lot of terminals, Beep goes through the sound card
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn Beep(frequency: u32, millis: u32) -> i32;
+}
+
+fn beep(frequency: u32, millis: u32) {
+    #[cfg(windows)]
+    // SAFETY: Beep takes two plain numbers
+    unsafe {
+        Beep(frequency, millis);
+    }
+    #[cfg(not(windows))]
+    let _ = (frequency, millis);
 }

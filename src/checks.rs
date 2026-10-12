@@ -41,11 +41,10 @@ pub fn drain(events: &Events) -> Vec<Event> {
 /// in a second or two
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
     person.say(&format!("{text} ({} seconds)", wait.as_secs()));
-    person.beep();
+    person.go();
     let mut seen = Vec::new();
     collect(person, events, wait, &mut seen)?;
-    person.beep();
-    person.say("done");
+    person.stop();
     Ok(seen)
 }
 
@@ -377,13 +376,13 @@ impl Checks<'_> {
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
-        self.person.beep();
+        self.person.go();
         self.person.wait(Duration::from_secs(3))?;
         let pressed = self.device.press(Button::Left);
         self.person.wait(Duration::from_millis(500))?;
         let released = self.device.release(Button::Left);
         self.person.wait(Duration::from_secs(2))?;
-        self.person.beep();
+        self.person.stop();
         self.person.say("you can let go now");
         let seen = tally(&drain(&events));
         result(self.report, name, pressed.and(released), &seen);
@@ -504,7 +503,7 @@ impl Checks<'_> {
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
-        self.person.beep();
+        self.person.go();
         let until = Instant::now() + self.person.scaled(Duration::from_secs(10));
         let mut clicks = 0;
         let mut sent = Ok(());
@@ -513,7 +512,7 @@ impl Checks<'_> {
             clicks += 1;
             self.person.wait(Duration::from_secs(2))?;
         }
-        self.person.beep();
+        self.person.stop();
         let seen = drain(&events);
         let middle = seen
             .iter()
@@ -693,7 +692,7 @@ impl Checks<'_> {
             Direction::Both
         };
         let mut done = self.device.lock_axis(axis, first);
-        self.person.beep();
+        self.person.go();
         let mut seen = Vec::new();
         for step in 0..4 {
             if one_way && step == 2 {
@@ -717,7 +716,7 @@ impl Checks<'_> {
             Direction::Both
         };
         let unlocked = self.device.unlock_axis(axis, last);
-        self.person.beep();
+        self.person.stop();
         seen.extend(drain(&events));
         if let Err(error) = done.and(unlocked) {
             self.report
