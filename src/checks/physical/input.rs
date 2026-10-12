@@ -23,6 +23,19 @@ impl Checks<'_> {
                 &events,
                 &format!("click the {} once in the box below", button_name(button)),
                 |log, window| {
+                    // some mice swap the two side buttons, so the other one is a hint, not a failure
+                    let other = match button {
+                        Button::Side1 => Some(Button::Side2),
+                        Button::Side2 => Some(Button::Side1),
+                        _ => None,
+                    };
+                    if let Some(other) = other
+                        && pad::presses(window, other) > 0
+                        && pad::presses(window, button) == 0
+                    {
+                        self.person
+                            .cue("that was the other side button, your mouse has them swapped, click the other one");
+                    }
                     (self.person.scripted() || window_pair(window, button))
                         && (!supported(self.device, Action::ButtonEvents)
                             || button_pair(log, button))
