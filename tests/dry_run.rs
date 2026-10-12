@@ -25,7 +25,7 @@ fn a_dry_run_goes_through_and_writes_a_clean_report() {
         "square of moves: passed",
         "button events, all five buttons: passed",
         "unplug and replug: passed",
-        "close while middle is held: passed",
+        "close: passed",
     ] {
         assert!(text.contains(check), "{check} missing in\n{text}");
     }

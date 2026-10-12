@@ -160,7 +160,8 @@ fn common(
     checks.identity();
     checks.automatic()?;
     checks.with_them()?;
-    checks.reconnect(what, unplug)
+    checks.reconnect(what, unplug)?;
+    checks.hold_for_close()
 }
 
 /// runs the checks and always closes, so a stopped run still lets go of everything

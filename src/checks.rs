@@ -42,21 +42,26 @@ pub fn drain(events: &Events) -> Vec<Event> {
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
     person.say(&format!("{text} ({} seconds)", wait.as_secs()));
     person.beep();
-    let until = Instant::now() + person.scaled(wait);
     let mut seen = Vec::new();
+    collect(person, events, wait, &mut seen)?;
+    person.beep();
+    person.say("done");
+    Ok(seen)
+}
+
+/// reads everything that comes in for this long
+fn collect(person: &Person, events: &Events, wait: Duration, seen: &mut Vec<Event>) -> Run<()> {
+    let until = Instant::now() + person.scaled(wait);
     loop {
         person.stopped()?;
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            break;
+            return Ok(());
         }
         if let Ok(event) = events.recv_timeout(left.min(Duration::from_millis(50))) {
             seen.push(event);
         }
     }
-    person.beep();
-    person.say("done");
-    Ok(seen)
 }
 
 fn buttons_in(events: &[Event]) -> usize {
@@ -604,7 +609,10 @@ impl Checks<'_> {
                 ),
                 Ok(()) => self.report.check(
                     &format!("{button:?} locked, your clicks still came in as events"),
-                    if buttons_in(&seen) > 0 {
+                    // only a press of this button counts, a release can be late from the one before
+                    if seen.iter().any(|e| {
+                        matches!(e, Event::Button { button: b, pressed: true, .. } if *b == button)
+                    }) {
                         Outcome::Passed
                     } else {
                         Outcome::Noted
@@ -686,13 +694,15 @@ impl Checks<'_> {
         };
         let mut done = self.device.lock_axis(axis, first);
         self.person.beep();
+        let mut seen = Vec::new();
         for step in 0..4 {
-            self.person.wait(Duration::from_secs(2))?;
             if one_way && step == 2 {
                 done = done
                     .and(self.device.unlock_axis(axis, Direction::Positive))
                     .and(self.device.lock_axis(axis, Direction::Negative));
+                self.person.say("now you can only go right");
             }
+            collect(self.person, &events, Duration::from_secs(2), &mut seen)?;
             let amount = if step % 2 == 0 { 150 } else { -150 };
             let (dx, dy) = if axis == Axis::X {
                 (amount, 0)
@@ -708,7 +718,7 @@ impl Checks<'_> {
         };
         let unlocked = self.device.unlock_axis(axis, last);
         self.person.beep();
-        let seen = drain(&events);
+        seen.extend(drain(&events));
         if let Err(error) = done.and(unlocked) {
             self.report
                 .check(&name, Outcome::Failed, &error.to_string());
@@ -879,6 +889,26 @@ impl Checks<'_> {
         Ok(())
     }
 
+    /// the last thing before close, so close has something held to let go of, and the trace shows it does
+    pub fn hold_for_close(&mut self) -> Run<()> {
+        let name = "middle held when the box gets closed";
+        if !self.person.ready(
+            "last bit: anybox holds middle and then closes the box, which should let go of it. put your cursor over              the desktop",
+        )? {
+            self.report.check(name, Outcome::Skipped, "");
+            return Ok(());
+        }
+        match self.device.press(Button::Middle) {
+            Ok(()) => self.report.check(
+                name,
+                Outcome::Noted,
+                "the trace after this shows what close sent",
+            ),
+            Err(error) => self.report.check(name, Outcome::Failed, &error.to_string()),
+        }
+        Ok(())
+    }
+
     fn await_event(
         &self,
         events: &Events,
@@ -906,22 +936,12 @@ impl Checks<'_> {
     }
 }
 
-/// closes it and says what close couldn't do, because a failed close can leave something held. a middle press
-/// goes in first, so the trace shows close letting go of something held
+/// closes it and says what close couldn't do, because a failed close can leave something held
 pub fn close(device: &Device, person: &Person, report: &mut Report) {
-    let held = device.press(Button::Middle);
     match device.close() {
-        Ok(()) => report.check(
-            "close while middle is held",
-            Outcome::Passed,
-            &format!("press {held:?}"),
-        ),
+        Ok(()) => report.check("close", Outcome::Passed, ""),
         Err(error) => {
-            report.check(
-                "close while middle is held",
-                Outcome::Failed,
-                &error.to_string(),
-            );
+            report.check("close", Outcome::Failed, &error.to_string());
             person.say(&format!(
                 "closing the box didn't fully work ({error}), so if a button or key is still held or locked, \
                  unplug the box and plug it back in"
