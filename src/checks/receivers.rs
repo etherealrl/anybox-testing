@@ -31,7 +31,7 @@ impl Checks<'_> {
         drain(&all);
         self.person.action(
             if keyboard {
-                "type abc now"
+                "type \"abc\" now"
             } else {
                 "click and move your mouse now"
             },
@@ -93,7 +93,7 @@ impl Checks<'_> {
             .acquire(
                 &again,
                 if keyboard {
-                    "press a once now"
+                    "press \"a\" once now"
                 } else {
                     "click left once now"
                 },

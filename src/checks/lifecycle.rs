@@ -163,7 +163,7 @@ impl Checks<'_> {
                 );
                 return Ok(());
             }
-            let log = self.acquire(&events, "press a once now", |log, _| [true, false].into_iter().all(|down| log.iter().any(|e| matches!(e, Event::Key { key: Key(4), pressed, .. } if *pressed == down))))?.unwrap_or_default();
+            let log = self.acquire(&events, "press \"a\" once now", |log, _| [true, false].into_iter().all(|down| log.iter().any(|e| matches!(e, Event::Key { key: Key(4), pressed, .. } if *pressed == down))))?.unwrap_or_default();
             self.report.check(
                 "key events after reconnect",
                 passed_if(log.iter().any(|e| matches!(e, Event::Key { .. }))),

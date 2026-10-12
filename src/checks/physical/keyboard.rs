@@ -4,7 +4,7 @@ impl Checks<'_> {
     pub(super) fn physical_keys(&mut self) -> Run<()> {
         if !self
             .person
-            .ready("press and release a, b, then c on the keyboard in the box")?
+            .ready("press and release \"a\", \"b\", then \"c\" on the keyboard in the box")?
         {
             self.report.check("physical keys", Outcome::Skipped, "");
             return Ok(());
@@ -15,7 +15,7 @@ impl Checks<'_> {
             let log = self
                 .acquire(
                     &events,
-                    &format!("press {letter} once now"),
+                    &format!("press \"{letter}\" once now"),
                     |log, window| {
                         pad::key_pair(window, &letter.to_uppercase())
                             && (!supported(self.device, Action::KeyEvents) || key_pair(log, key))
@@ -50,13 +50,14 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("with caps lock off, type abc without holding shift")?
+            .ready("with caps lock off, type \"abc\" without holding shift")?
         {
             self.report.check("key merging", Outcome::Skipped, "");
             return Ok(());
         }
         self.person.pad_clear();
-        self.person.action("type abc now", Duration::from_secs(10));
+        self.person
+            .action("type \"abc\" now", Duration::from_secs(10));
         self.person.wait(Duration::from_secs(10))?;
         let baseline = self.person.seen().unwrap_or_default();
         if pad::text(&baseline) != "abc"
@@ -74,7 +75,7 @@ impl Checks<'_> {
         self.person.pad_clear();
         let held = self.device.press_key(Key::LEFT_SHIFT);
         self.person.action(
-            "type abc now, don't hold shift yourself",
+            "type \"abc\" now, don't hold shift yourself",
             Duration::from_secs(6),
         );
         let waited = self.person.wait(Duration::from_secs(6));
@@ -83,7 +84,7 @@ impl Checks<'_> {
         waited?;
         self.person.pad_clear();
         self.person
-            .action("type a once more", Duration::from_secs(5));
+            .action("type \"a\" once more", Duration::from_secs(5));
         self.person.wait(Duration::from_secs(5))?;
         let after = self.person.seen().unwrap_or_default();
         let shift_seen = shifted
