@@ -104,21 +104,25 @@ fn windows_version() -> String {
 /// apart
 fn ports(person: &Person, report: &mut Report, when: &str) -> Vec<serialport::SerialPortInfo> {
     report.section(&format!("ports {when}"));
-    person.say(&format!(
-        "
-serial ports {when}:"
-    ));
+    person.say("");
+    person.say(&format!("serial ports {when}:"));
     let ports = serialport::available_ports().unwrap_or_default();
     if ports.is_empty() {
+        person.say("  none");
         report.line("none");
     }
     for port in &ports {
         let line = match &port.port_type {
             SerialPortType::UsbPort(usb) => format!(
-                "{} {:04X}:{:04X} serial {:?}, {:?}, {:?}",
-                port.port_name, usb.vid, usb.pid, usb.serial_number, usb.manufacturer, usb.product
+                "{:<7} USB {:04X}:{:04X}  serial {}  {} / {}",
+                port.port_name,
+                usb.vid,
+                usb.pid,
+                usb.serial_number.as_deref().unwrap_or("none"),
+                usb.manufacturer.as_deref().unwrap_or("?"),
+                usb.product.as_deref().unwrap_or("?"),
             ),
-            other => format!("{} {other:?}", port.port_name),
+            other => format!("{:<7} {other:?}", port.port_name),
         };
         person.say(&format!("  {line}"));
         report.line(&line);
@@ -132,14 +136,20 @@ fn is_ysc_left(port: &serialport::SerialPortInfo) -> bool {
 }
 
 /// the questions about what's plugged in, since anybox can't read any of it
-fn setup(person: &Person, report: &mut Report, extra: &[&str]) -> Run<()> {
+fn setup(person: &Person, report: &mut Report, extra: &[(&str, &str)]) -> Run<()> {
     let mut questions = vec![
-        "which mouse is plugged into the box, and at what polling rate?",
-        "which keyboard is plugged into the box, and at what polling rate (or none)?",
+        (
+            "which mouse is plugged into the box, and at what polling rate?",
+            "roughly is fine, like \"G Pro Superlight, 1000 Hz\"",
+        ),
+        (
+            "which keyboard is plugged into the box, and at what polling rate?",
+            "roughly is fine too, or \"none\"",
+        ),
     ];
     questions.extend_from_slice(extra);
-    for question in questions {
-        let answer = person.answer(question, "dry run")?;
+    for (question, how) in questions {
+        let answer = person.answer(question, how, "dry run")?;
         report.line(&format!("{question} {answer}"));
     }
     Ok(())
@@ -178,13 +188,20 @@ fn on_box(
 }
 
 fn run(person: &Person, report: &mut Report) -> Run<()> {
+    person.heading("anybox tester");
     person.say(
-        "this checks how anybox does with your boxes and writes everything into one report you send back. it moves \
-         your cursor a little, clicks right, middle and the side buttons, presses and lets go of left while you're \
-         holding it, and holds F13, F14 and shift, it never types anything. close games and anything that reacts \
-         to clicks first. if anything ever stays held, unplugging the box lets go of it, and Ctrl+C stops the run \
-         at any time\n",
+        "this checks how anybox does with your boxes and writes everything into one report you send back.",
     );
+    person.say("");
+    person.say(
+        "it moves your cursor a little, clicks right, middle and the side buttons, presses and lets go of left \
+         while you're holding it, and holds F13, F14 and shift. it never types anything.",
+    );
+    person.say("");
+    person.say("before you start:");
+    person.say("  - close games and anything that reacts to clicks");
+    person.say("  - if anything ever stays held, unplugging the box lets go of it");
+    person.say("  - Ctrl+C stops the run at any time");
     let found = ports(person, report, "at the start");
 
     if !found.iter().any(is_ysc_left) {
@@ -193,13 +210,19 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
     for port in found.iter().filter(|p| is_ysc_left(p)) {
         let path = port.port_name.as_str();
         report.section(&format!("YSC 8K on {path}"));
-        person.say(&format!("\nYSC 8K on {path}"));
+        person.heading(&format!("YSC 8K on {path}"));
         setup(
             person,
             report,
             &[
-                "which port on the YSC is the cable to this PC in (what's it labeled)?",
-                "is interpolation or a curve turned on in the YSC tool?",
+                (
+                    "which port on the YSC is the cable to this PC plugged into?",
+                    "just say what it's labeled, or describe where it is",
+                ),
+                (
+                    "is interpolation or a curve turned on in the YSC tool?",
+                    "yes, no, or not sure",
+                ),
             ],
         )?;
         ysc::debug_mode(path, person, report)?;
@@ -236,18 +259,18 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
         .collect();
     if ferrums.is_empty() {
         let port = person.answer(
-            "\nno Ferrum app port found. if you have a Ferrum, start its app and type the app's port (like COM5), \
-             otherwise just press Enter:",
+            "no Ferrum app port found. if you have a Ferrum, start its app and type the app's port",
+            "like COM5, or just press Enter if you don't have one",
             "",
         )?;
         if !port.is_empty() {
             ferrums.push((port, FerrumApi::Software));
         }
     }
-    if !ferrums.is_empty() || person.yes_no("\ndo you have a Ferrum plugged in?")? == Some(true) {
+    if !ferrums.is_empty() || person.yes_no("do you have a Ferrum plugged in?")? == Some(true) {
         let port = person.answer(
-            "for the Ferrum's own port (the box itself, not the app), type its port from the serial ports listed \
-             above, or press Enter to skip it:",
+            "now the Ferrum's own port (the box itself, not the app), from the serial ports listed above",
+            "like COM7, or just press Enter to skip it",
             "",
         )?;
         if !port.is_empty() {
@@ -256,7 +279,7 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
     }
     for (path, api) in ferrums {
         report.section(&format!("Ferrum {api:?} on {path}"));
-        person.say(&format!("\nFerrum ({api:?}) on {path}"));
+        person.heading(&format!("Ferrum ({api:?}) on {path}"));
         setup(person, report, &[])?;
         match Connect::port(&path)
             .family(Family::Ferrum)
@@ -288,13 +311,14 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
             continue;
         }
         let question = format!(
-            "\nalso run the checks on the {} on {}? (optional, it's about 5 minutes)",
+            "also run the checks on the {} on {}? it's optional and takes about 5 minutes",
             found.info.family, found.port
         );
         if person.yes_no(&question)? != Some(true) {
             continue;
         }
         report.section(&format!("{} on {}", found.info.family, found.port));
+        person.heading(&format!("{} on {}", found.info.family, found.port));
         setup(person, report, &[])?;
         match Connect::port(&found.port).family(found.info.family).open() {
             Ok(device) => on_box(device, person, report, "the box's cable to this PC", None)?,

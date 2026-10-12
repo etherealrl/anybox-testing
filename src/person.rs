@@ -11,14 +11,47 @@ pub struct Stopped;
 
 pub type Run<T> = Result<T, Stopped>;
 
+/// fits a default console window
+const WIDTH: usize = 100;
+
 /// the person at the PC. in a dry run a script answers for them and every wait is a lot shorter
 pub struct Person {
     pub scripted: bool,
 }
 
 impl Person {
+    /// wrapped at a word, a console otherwise breaks lines in the middle of one
     pub fn say(&self, text: &str) {
-        println!("{text}");
+        for line in text.lines() {
+            if line.len() <= WIDTH {
+                println!("{line}");
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            let mut out = String::new();
+            for word in line.split_whitespace() {
+                if !out.is_empty() && out.len() + 1 + word.len() > WIDTH {
+                    println!("{out}");
+                    out.clear();
+                }
+                if out.is_empty() {
+                    out.push_str(&line[..indent]);
+                } else {
+                    out.push(' ');
+                }
+                out.push_str(word);
+            }
+            println!("{out}");
+        }
+    }
+
+    /// the start of a box's part
+    pub fn heading(&self, title: &str) {
+        println!(
+            "
+
+=== {title} ==="
+        );
     }
 
     fn read(&self) -> Run<String> {
@@ -34,15 +67,23 @@ impl Person {
         }
     }
 
-    fn prompt(&self, text: &str) {
-        print!("{text} ");
+    /// a question, what they can answer, then the cursor on its own line
+    fn prompt(&self, text: &str, how: &str) {
+        println!();
+        self.say(text.trim());
+        if !how.is_empty() {
+            self.say(&format!("  ({how})"));
+        }
+        print!("> ");
         let _ = io::stdout().flush();
     }
 
     /// false when they typed s to skip it
     pub fn ready(&self, text: &str) -> Run<bool> {
-        self.say(text);
-        self.prompt("press Enter when you're ready, or s and Enter to skip this part");
+        self.prompt(
+            text,
+            "press Enter to start, or type s and Enter to skip this one",
+        );
         if self.scripted {
             println!();
             return Ok(true);
@@ -53,7 +94,7 @@ impl Person {
     /// none when they skipped it
     pub fn yes_no(&self, question: &str) -> Run<Option<bool>> {
         loop {
-            self.prompt(&format!("{question} (y, n, or s to skip)"));
+            self.prompt(question, "y or n, or s to skip");
             if self.scripted {
                 println!("y");
                 return Ok(Some(true));
@@ -62,13 +103,13 @@ impl Person {
                 "y" | "yes" => return Ok(Some(true)),
                 "n" | "no" => return Ok(Some(false)),
                 "s" => return Ok(None),
-                _ => self.say("just y, n or s"),
+                _ => self.say("just y, n or s please"),
             }
         }
     }
 
-    pub fn answer(&self, question: &str, scripted: &str) -> Run<String> {
-        self.prompt(question);
+    pub fn answer(&self, question: &str, how: &str, scripted: &str) -> Run<String> {
+        self.prompt(question, how);
         if self.scripted {
             println!("{scripted}");
             return Ok(scripted.to_string());
@@ -86,7 +127,7 @@ impl Person {
 
     /// and ends here, two low beeps
     pub fn stop(&self) {
-        self.say(">>> stop, done");
+        self.say(">>> done");
         if !self.scripted {
             beep(500, 250);
             std::thread::sleep(Duration::from_millis(100));

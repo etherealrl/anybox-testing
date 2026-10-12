@@ -40,7 +40,7 @@ pub fn drain(events: &Events) -> Vec<Event> {
 /// a timed part. it keeps reading the whole time, because the queue only holds so much and a fast mouse fills it
 /// in a second or two
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
-    person.say(&format!("{text} ({} seconds)", wait.as_secs()));
+    person.say(&format!("{text} ({} seconds)", wait.as_secs()).trim_start());
     person.go();
     let mut seen = Vec::new();
     collect(person, events, wait, &mut seen)?;
@@ -369,7 +369,7 @@ impl Checks<'_> {
     fn forced_release(&mut self) -> Run<()> {
         let name = "left held by you while anybox presses and releases it";
         if !self.person.ready(
-            "hold the LEFT button down after the beep and keep holding it until the second beep, with your cursor \
+            "when it says NOW (with a beep), hold the LEFT button down and keep holding it until it says done, with your cursor \
              over the desktop",
         )? {
             self.report.check(name, Outcome::Skipped, "");
@@ -400,7 +400,7 @@ impl Checks<'_> {
 
     fn every_input(&mut self) -> Run<()> {
         if !self.person.ready(
-            "after the beep click EVERY button on your mouse, move it, scroll up and down, and press a few keys on \
+            "when it says NOW, click EVERY button on your mouse, move it, scroll up and down, and press a few keys on \
              the keyboard behind the box if there is one",
         )? {
             self.report
@@ -408,7 +408,7 @@ impl Checks<'_> {
             return Ok(());
         }
         let events = self.device.events();
-        let seen = gather(self.person, &events, "go", Duration::from_secs(10))?;
+        let seen = gather(self.person, &events, "", Duration::from_secs(10))?;
         self.report
             .line(&format!("everything that came in: {}", tally(&seen)));
         let pressed: Vec<Button> = seen
@@ -471,14 +471,14 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("after the beep move your mouse around fast in circles until the second beep")?
+            .ready("when it says NOW, move your mouse around fast in circles until it says done")?
         {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::MOTION);
         let wait = Duration::from_secs(5);
-        let seen = gather(self.person, &events, "go", wait)?;
+        let seen = gather(self.person, &events, "", wait)?;
         let motion = seen
             .iter()
             .filter(|e| matches!(e, Event::Motion { .. }))
@@ -496,7 +496,7 @@ impl Checks<'_> {
             return Ok(());
         }
         if !self.person.ready(
-            "for 10 seconds after the beep, click LEFT a few times with your cursor over the desktop. anybox clicks \
+            "for 10 seconds after it says NOW, click LEFT a few times with your cursor over the desktop. anybox clicks \
              middle every 2 seconds at the same time",
         )? {
             self.report.check(name, Outcome::Skipped, "");
@@ -558,8 +558,8 @@ impl Checks<'_> {
         }
         let held = self.device.press_key(Key::LEFT_SHIFT);
         let line = self.person.answer(
-            "anybox holds shift now, so type abc in lowercase on the keyboard behind the box (caps lock off) and \
-             press Enter:",
+            "anybox holds shift now, so type abc on the keyboard behind the box and press Enter",
+            "in lowercase with caps lock off, it should come out as ABC",
             "ABC",
         );
         let released = self.device.release_key(Key::LEFT_SHIFT);
@@ -672,13 +672,13 @@ impl Checks<'_> {
         };
         let text = if one_way {
             "next anybox locks your mouse one way at a time for 8 seconds, first you can only go left, then only \
-             right, and it pushes the cursor sideways itself a few times. after the beep move your mouse around in \
+             right, and it pushes the cursor sideways itself a few times. when it says NOW, move your mouse around in \
              every direction"
                 .to_string()
         } else {
             format!(
                 "next anybox locks your mouse {along} for 8 seconds and pushes the cursor {along} itself a few times. \
-                 after the beep move your mouse around in every direction"
+                 when it says NOW, move your mouse around in every direction"
             )
         };
         if !self.person.ready(&text)? {
@@ -758,14 +758,14 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("for 5 seconds after the beep, click and move your mouse")?
+            .ready("for 5 seconds after it says NOW, click and move your mouse")?
         {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
         let buttons = self.device.events_of(EventKinds::BUTTONS);
         let all = self.device.events();
-        let everything = gather(self.person, &all, "go", Duration::from_secs(5))?;
+        let everything = gather(self.person, &all, "", Duration::from_secs(5))?;
         let only = drain(&buttons);
         let input_only_buttons = only.iter().all(|e| {
             !matches!(
