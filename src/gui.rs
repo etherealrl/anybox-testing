@@ -40,18 +40,35 @@ impl App {
     }
     fn record(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
-        let (events, focused, released, position, shift) = ctx.input(|i| {
+        let (events, focused, released, position, shift, held) = ctx.input(|i| {
+            let mut held: Vec<String> = [
+                (PointerButton::Primary, "left"),
+                (PointerButton::Secondary, "right"),
+                (PointerButton::Middle, "middle"),
+                (PointerButton::Extra1, "side 1"),
+                (PointerButton::Extra2, "side 2"),
+            ]
+            .into_iter()
+            .filter(|(button, _)| i.pointer.button_down(*button))
+            .map(|(_, name)| name.to_string())
+            .collect();
+            held.extend(i.keys_down.iter().map(|key| format!("{key:?}")));
+            if i.modifiers.shift {
+                held.push("shift".into());
+            }
             (
                 i.raw.events.clone(),
                 i.focused,
                 !i.pointer.any_down() && i.keys_down.is_empty() && i.modifiers.is_none(),
                 i.pointer.hover_pos(),
                 i.modifiers.shift,
+                held.join(", "),
             )
         });
         self.ui.change(|v| {
             v.focused = focused;
             v.released = released;
+            v.held = held;
             v.in_area = self
                 .area
                 .is_some_and(|r| position.is_some_and(|p| r.contains(p)));

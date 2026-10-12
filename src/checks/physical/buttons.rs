@@ -7,10 +7,9 @@ impl Checks<'_> {
                 .check("button locks", Outcome::NotAvailable, "no button locks");
             return Ok(());
         }
-        if !self
-            .person
-            .ready("click the named button while it's locked")?
-        {
+        if !self.person.ready(
+            "click each button twice while it's locked, then hands off while anybox clicks it",
+        )? {
             self.report.check("button locks", Outcome::Skipped, "");
             return Ok(());
         }
@@ -60,9 +59,13 @@ impl Checks<'_> {
             };
             let physical = presses_of(&log, button) > 0;
             let suppressed = self.person.seen().map(|w| pad::presses(&w, button) == 0);
+            // a moment to take your hands off before anybox clicks, the bar above shows it
+            self.person.action(
+                "hands off, anybox clicks it next",
+                Duration::from_millis(1500),
+            );
+            self.person.wait(Duration::from_millis(1500))?;
             self.person.pad_clear();
-            self.person
-                .action("don't touch anything", Duration::from_millis(500));
             let clicked = self.device.click(button);
             let waited = self.person.wait(Duration::from_millis(500));
             let unlocked = self.device.unlock_button(button);

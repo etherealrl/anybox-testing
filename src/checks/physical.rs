@@ -43,20 +43,25 @@ impl Checks<'_> {
             self.card("key merging", Self::key_merge)?;
         } else {
             self.card("physical buttons", Self::physical_buttons)?;
+            // moving the mouse around may take the cursor out of the test area, that's fine here
+            self.free_cursor(true);
             self.card("physical movement", Self::physical_motion)?;
             self.card("physical wheel", Self::physical_wheel)?;
             self.card("fast movement", Self::fast_motion)?;
+            self.free_cursor(false);
             self.card("held button, press and release", |s| {
                 s.forced_release(false)
             })?;
             self.card("held button, release only", |s| s.forced_release(true))?;
             self.card("injection in events", Self::own_output_in_events)?;
             self.card("button locks", Self::button_locks)?;
+            self.free_cursor(true);
             for axis in [Axis::X, Axis::Y] {
                 self.card(&format!("{axis} lock").to_lowercase(), |s| {
                     s.axis_lock(axis)
                 })?;
             }
+            self.free_cursor(false);
             self.report
                 .check("key merging", Outcome::NotAvailable, "a mouse is attached");
         }
@@ -93,6 +98,14 @@ impl Checks<'_> {
         }
         self.person.cue("we didn't see that, try again or skip");
         Ok(Some(log))
+    }
+}
+
+impl Checks<'_> {
+    fn free_cursor(&self, free: bool) {
+        if let Some(ui) = &self.person.ui {
+            ui.change(|v| v.require_area = !free && v.can_position);
+        }
     }
 }
 

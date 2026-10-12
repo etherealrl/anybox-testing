@@ -63,7 +63,8 @@ impl Checks<'_> {
         } else {
             buttons_in(&only) > 0
                 && buttons_in(&everything) > 0
-                && everything.iter().any(|e| matches!(e, Event::Motion { .. }))
+                && (!supported(self.device, Action::MotionEvents)
+                    || everything.iter().any(|e| matches!(e, Event::Motion { .. })))
         };
         self.report.check(
             name,

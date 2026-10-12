@@ -99,14 +99,15 @@ impl Checks<'_> {
             .seen()
             .and_then(|w| pad::ends_down(&w, Button::Right));
         let keeps = quirks(self.device, Action::Press).contains(&Quirk::KeepsHeld);
+        // a box that restarts when unplugged comes back with nothing held and never sends windows the release, so
+        // windows still thinking right is down says nothing about anybox. the trace shows what anybox sent
         self.report.check(
             "right after the reconnect",
-            if keeps || !known_down || state.is_none() {
-                Outcome::Noted
-            } else {
-                passed_if(state == Some(false))
-            },
-            &format!("known down {known_down}, final state {state:?}, keeps held {keeps}"),
+            Outcome::Noted,
+            &format!(
+                "known down {known_down}, windows still thinks it's down {}, keeps held {keeps}",
+                state == Some(true)
+            ),
         );
         result(
             self.report,
@@ -114,6 +115,17 @@ impl Checks<'_> {
             self.device.release(Button::Right),
             "",
         );
+        if state == Some(true) {
+            self.person.pad_clear();
+            let cleared = self.acquire(&events, "click right once to clear it", |_, window| {
+                pad::releases(window, Button::Right) > 0
+            })?;
+            self.report.check(
+                "right cleared by your click after the reconnect",
+                Outcome::Noted,
+                &format!("{}", cleared.is_some()),
+            );
+        }
         if self.person.keyboard() {
             if locked.is_some() {
                 result(

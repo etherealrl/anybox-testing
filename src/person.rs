@@ -55,6 +55,8 @@ pub struct Card {
 
 #[derive(Clone, Default)]
 pub struct View {
+    /// what the window thinks is still held, so a stuck button can be named and cleared
+    pub held: String,
     pub section: String,
     pub text: String,
     pub hint: String,
@@ -228,12 +230,25 @@ impl Person {
             if v.focused && v.released && (!v.require_area || v.in_area) {
                 break;
             }
+            let wanted = if !v.focused {
+                "click on this window so it's in front".to_string()
+            } else if !v.released {
+                format!(
+                    "let go of everything. windows thinks {} is still held, press it once to clear it",
+                    v.held
+                )
+            } else {
+                "put your cursor in the test area".to_string()
+            };
+            if v.text != wanted {
+                ui.change(|v| v.text = wanted);
+            }
             self.wait(Duration::from_millis(50))?;
         }
         for second in [2, 1] {
             ui.change(|v| {
                 v.phase = Phase::Countdown;
-                v.text = format!("starts in {second}");
+                v.text = format!("starts in {second}, hands off until it tells you what to do");
             });
             self.wait(Duration::from_secs(1))?;
         }
