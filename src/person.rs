@@ -1,137 +1,201 @@
-use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Ctrl+C, so every wait can stop and the devices get closed on the way out instead of left holding something
+use crate::pad::Seen;
+
+/// closing the window or Ctrl+C, so every wait can stop and the devices get closed on the way out instead of left
+/// holding something
 pub static STOP: AtomicBool = AtomicBool::new(false);
 
-/// the run was stopped with Ctrl+C or the console closed
+/// the run was stopped
 #[derive(Debug)]
 pub struct Stopped;
 
 pub type Run<T> = Result<T, Stopped>;
 
-/// fits a default console window
-const WIDTH: usize = 100;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// anybox is doing something, nothing to press
+    #[default]
+    Busy,
+    Ready,
+    YesNo,
+    Text,
+}
 
-/// the person at the PC. in a dry run a script answers for them and every wait is a lot shorter
+pub enum Answer {
+    Start,
+    Skip,
+    Yes,
+    No,
+    Text(String),
+}
+
+/// what the window shows right now, the checks write it and the window draws it
+#[derive(Default)]
+pub struct View {
+    pub section: String,
+    pub text: String,
+    pub hint: String,
+    pub mode: Mode,
+    /// a timed part, from when to when
+    pub now: Option<(Instant, Instant)>,
+    pub status: Vec<String>,
+    /// the report's path once it's written
+    pub done: Option<String>,
+}
+
+/// the window's side: the view, the answers coming back, and every input Windows delivered to it
+pub struct Ui {
+    pub view: Mutex<View>,
+    pub answer: Sender<Answer>,
+    answers: Mutex<Receiver<Answer>>,
+    pub pad: Mutex<Vec<Seen>>,
+    pub ctx: OnceLock<eframe::egui::Context>,
+}
+
+impl Ui {
+    pub fn new() -> Arc<Self> {
+        let (answer, answers) = channel();
+        Arc::new(Self {
+            view: Mutex::new(View::default()),
+            answer,
+            answers: Mutex::new(answers),
+            pad: Mutex::new(Vec::new()),
+            ctx: OnceLock::new(),
+        })
+    }
+
+    pub fn change(&self, change: impl FnOnce(&mut View)) {
+        change(&mut self.view.lock().unwrap());
+        if let Some(ctx) = self.ctx.get() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// the person at the PC, through the window. in a dry run there's no window, a script answers for them and every
+/// wait is a lot shorter
 pub struct Person {
-    pub scripted: bool,
+    pub ui: Option<Arc<Ui>>,
 }
 
 impl Person {
-    /// wrapped at a word, a console otherwise breaks lines in the middle of one
+    pub fn scripted(&self) -> bool {
+        self.ui.is_none()
+    }
+
+    /// a line under the current step, for what's happening right now
     pub fn say(&self, text: &str) {
-        for line in text.lines() {
-            if line.len() <= WIDTH {
-                println!("{line}");
-                continue;
-            }
-            let indent = line.len() - line.trim_start().len();
-            let mut out = String::new();
-            for word in line.split_whitespace() {
-                if !out.is_empty() && out.len() + 1 + word.len() > WIDTH {
-                    println!("{out}");
-                    out.clear();
-                }
-                if out.is_empty() {
-                    out.push_str(&line[..indent]);
-                } else {
-                    out.push(' ');
-                }
-                out.push_str(word);
-            }
-            println!("{out}");
+        match &self.ui {
+            Some(ui) => ui.change(|view| {
+                view.status.push(text.to_string());
+            }),
+            None => println!("{text}"),
         }
     }
 
     /// the start of a box's part
     pub fn heading(&self, title: &str) {
-        println!(
-            "
-
-=== {title} ==="
-        );
-    }
-
-    fn read(&self) -> Run<String> {
-        if STOP.load(Ordering::Acquire) {
-            return Err(Stopped);
-        }
-        let mut line = String::new();
-        // Ctrl+C on Windows ends the read with nothing, same as a closed console
-        match io::stdin().lock().read_line(&mut line) {
-            Ok(0) | Err(_) => Err(Stopped),
-            _ if STOP.load(Ordering::Acquire) => Err(Stopped),
-            _ => Ok(line.trim().to_string()),
+        match &self.ui {
+            Some(ui) => ui.change(|view| {
+                view.section = title.to_string();
+                view.status.clear();
+            }),
+            None => println!("\n=== {title} ==="),
         }
     }
 
-    /// a question, what they can answer, then the cursor on its own line
-    fn prompt(&self, text: &str, how: &str) {
-        println!();
-        self.say(text.trim());
-        if !how.is_empty() {
-            self.say(&format!("  ({how})"));
+    fn ask(&self, ui: &Ui, mode: Mode, text: &str, hint: &str) -> Run<Answer> {
+        ui.change(|view| {
+            view.text = text.trim().to_string();
+            view.hint = hint.to_string();
+            view.mode = mode;
+            view.now = None;
+            view.status.clear();
+        });
+        let answers = ui.answers.lock().unwrap();
+        // an answer left over from a double click on the step before isn't this step's
+        while answers.try_recv().is_ok() {}
+        loop {
+            self.stopped()?;
+            match answers.recv_timeout(Duration::from_millis(100)) {
+                Ok(answer) => {
+                    ui.change(|view| view.mode = Mode::Busy);
+                    return Ok(answer);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Err(Stopped),
+            }
         }
-        print!("> ");
-        let _ = io::stdout().flush();
     }
 
-    /// false when they typed s to skip it
+    /// shows a step and waits for Start. false when they skipped it
     pub fn ready(&self, text: &str) -> Run<bool> {
-        self.prompt(
-            text,
-            "press Enter to start, or type s and Enter to skip this one",
-        );
-        if self.scripted {
-            println!();
-            return Ok(true);
+        match &self.ui {
+            Some(ui) => Ok(matches!(
+                self.ask(ui, Mode::Ready, text, "")?,
+                Answer::Start
+            )),
+            None => {
+                println!("\n{text}");
+                Ok(true)
+            }
         }
-        Ok(!self.read()?.eq_ignore_ascii_case("s"))
     }
 
     /// none when they skipped it
     pub fn yes_no(&self, question: &str) -> Run<Option<bool>> {
-        loop {
-            self.prompt(question, "y or n, or s to skip");
-            if self.scripted {
-                println!("y");
-                return Ok(Some(true));
-            }
-            match self.read()?.to_ascii_lowercase().as_str() {
-                "y" | "yes" => return Ok(Some(true)),
-                "n" | "no" => return Ok(Some(false)),
-                "s" => return Ok(None),
-                _ => self.say("just y, n or s please"),
+        match &self.ui {
+            Some(ui) => Ok(match self.ask(ui, Mode::YesNo, question, "")? {
+                Answer::Yes => Some(true),
+                Answer::No => Some(false),
+                _ => None,
+            }),
+            None => {
+                println!("\n{question} y");
+                Ok(Some(true))
             }
         }
     }
 
-    pub fn answer(&self, question: &str, how: &str, scripted: &str) -> Run<String> {
-        self.prompt(question, how);
-        if self.scripted {
-            println!("{scripted}");
-            return Ok(scripted.to_string());
-        }
-        self.read()
-    }
-
-    /// a timed part starts here, one high beep. it says so on screen too, for a PC without sound
-    pub fn go(&self) {
-        self.say(">>> NOW");
-        if !self.scripted {
-            beep(1500, 300);
+    pub fn answer(&self, question: &str, hint: &str, scripted: &str) -> Run<String> {
+        match &self.ui {
+            Some(ui) => Ok(match self.ask(ui, Mode::Text, question, hint)? {
+                Answer::Text(text) => text.trim().to_string(),
+                _ => String::new(),
+            }),
+            None => {
+                println!("\n{question} {scripted}");
+                Ok(scripted.to_string())
+            }
         }
     }
 
-    /// and ends here, two low beeps
+    /// a timed part starts, the window shows NOW with a countdown and it beeps once high
+    pub fn go(&self, wait: Duration) {
+        match &self.ui {
+            Some(ui) => {
+                let start = Instant::now();
+                ui.change(|view| view.now = Some((start, start + wait)));
+                beep(1500, 200);
+            }
+            None => println!(">>> NOW"),
+        }
+    }
+
+    /// and ends, two low beeps
     pub fn stop(&self) {
-        self.say(">>> done");
-        if !self.scripted {
-            beep(500, 250);
-            std::thread::sleep(Duration::from_millis(100));
-            beep(500, 250);
+        match &self.ui {
+            Some(ui) => {
+                ui.change(|view| view.now = None);
+                beep(500, 150);
+                std::thread::sleep(Duration::from_millis(80));
+                beep(500, 150);
+            }
+            None => println!(">>> done"),
         }
     }
 
@@ -145,20 +209,33 @@ impl Person {
 
     /// a dry run waits a twentieth of the time, the mock box needs no time to react
     pub fn scaled(&self, wait: Duration) -> Duration {
-        if self.scripted { wait / 20 } else { wait }
+        if self.scripted() { wait / 20 } else { wait }
     }
 
     pub fn wait(&self, wait: Duration) -> Run<()> {
         let until = Instant::now() + self.scaled(wait);
-        while Instant::now() < until {
-            if STOP.load(Ordering::Acquire) {
-                return Err(Stopped);
+        loop {
+            self.stopped()?;
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(());
             }
-            std::thread::sleep(
-                Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
-            );
+            std::thread::sleep(left.min(Duration::from_millis(20)));
         }
-        Ok(())
+    }
+
+    /// forgets what the window saw so far, so the next `seen` only has what came after
+    pub fn pad_clear(&self) {
+        if let Some(ui) = &self.ui {
+            ui.pad.lock().unwrap().clear();
+        }
+    }
+
+    /// what the window saw since the last clear. none in a dry run, there's no window to see anything
+    pub fn seen(&self) -> Option<Vec<Seen>> {
+        self.ui
+            .as_ref()
+            .map(|ui| std::mem::take(&mut *ui.pad.lock().unwrap()))
     }
 }
 

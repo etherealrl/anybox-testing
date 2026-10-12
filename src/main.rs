@@ -1,5 +1,10 @@
+// no console window next to the tester's own window
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod checks;
 mod ferrum;
+mod gui;
+mod pad;
 mod person;
 mod report;
 mod ysc;
@@ -12,7 +17,7 @@ use anybox::{ClickTiming, Connect, Device, Family, FerrumApi};
 use serialport::SerialPortType;
 
 use checks::{Checks, closing};
-use person::{Person, Run, STOP};
+use person::{Person, Run, STOP, Ui};
 use report::{Outcome, Report};
 
 const YSC_LEFT: &str = "TOWMCULEFT";
@@ -40,56 +45,82 @@ fn main() {
     // SAFETY: nothing else runs yet, so no other thread reads the environment while it changes
     unsafe { std::env::set_var("ANYBOX_TRACE", &trace) };
 
-    let person = Person { scripted };
-    let mut report = Report::default();
-    if let Err(error) = ctrlc::set_handler(|| STOP.store(true, Ordering::Release)) {
-        // without it Ctrl+C ends the program right away, though dropping the devices still lets go of things
-        report.line(&format!("Ctrl+C handler not installed: {error}"));
-        person.say(
-            "just so you know, Ctrl+C won't stop this cleanly, so let it run to the end if you can",
-        );
+    if scripted {
+        let _ = ctrlc::set_handler(|| STOP.store(true, Ordering::Release));
+        let person = Person { ui: None };
+        let (failed, said) = session(&person, &out, stamp, &trace);
+        println!("{said}");
+        if failed > 0 {
+            std::process::exit(1);
+        }
+        return;
     }
-    let ran = if scripted {
-        dry_run(&person, &mut report)
+
+    let ui = Ui::new();
+    let worker = {
+        let ui = ui.clone();
+        std::thread::spawn(move || {
+            let person = Person {
+                ui: Some(ui.clone()),
+            };
+            let (_, said) = session(&person, &out, stamp, &trace);
+            ui.change(|view| view.done = Some(said));
+        })
+    };
+    let options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("anybox tester")
+            .with_maximized(true),
+        ..Default::default()
+    };
+    let started = eframe::run_native(
+        "anybox tester",
+        options,
+        Box::new(move |cc| {
+            let _ = ui.ctx.set(cc.egui_ctx.clone());
+            Ok(Box::new(gui::App::new(ui, worker)))
+        }),
+    );
+    if let Err(error) = started {
+        eprintln!("couldn't open the window: {error}");
+    }
+}
+
+/// the whole run and its report. how many checks failed, and where the report went
+fn session(person: &Person, out: &Path, stamp: u64, trace: &Path) -> (usize, String) {
+    let mut report = Report::default();
+    let ran = if person.scripted() {
+        dry_run(person, &mut report)
     } else {
-        run(&person, &mut report)
+        run(person, &mut report)
     };
     if ran.is_err() {
-        report.line("\nthe run was stopped before the end");
+        report.line(
+            "
+the run was stopped before the end",
+        );
     }
 
     // every device and probe is closed by now, so the trace is flushed
-    let traced = std::fs::read_to_string(&trace).unwrap_or_default();
-    let _ = std::fs::remove_file(&trace);
+    let traced = std::fs::read_to_string(trace).unwrap_or_default();
+    let _ = std::fs::remove_file(trace);
     let header = format!(
         "anybox-testing {}, anybox {}, {}",
         env!("CARGO_PKG_VERSION"),
         env!("ANYBOX_VERSION"),
         windows_version()
     );
-    let name = if scripted {
+    let name = if person.scripted() {
         "anybox-dry-run"
     } else {
         "anybox-report"
     };
     let file = out.join(format!("{name}-{stamp}.txt"));
-    match std::fs::write(&file, report.render(&header, &traced)) {
-        Ok(()) => person.say(&format!(
-            "\nall done, the report is {}. it's plain text so you can read it before you send it",
-            file.display()
-        )),
-        Err(error) => person.say(&format!(
-            "\ncouldn't write the report to {}: {error}",
-            file.display()
-        )),
-    }
-    if !scripted {
-        person.say("press Enter to close this window");
-        let _ = std::io::stdin().read_line(&mut String::new());
-    }
-    if report.failed() > 0 && scripted {
-        std::process::exit(1);
-    }
+    let said = match std::fs::write(&file, report.render(&header, &traced)) {
+        Ok(()) => file.display().to_string(),
+        Err(error) => format!("couldn't write the report to {}: {error}", file.display()),
+    };
+    (report.failed(), said)
 }
 
 fn windows_version() -> String {
@@ -189,20 +220,31 @@ fn on_box(
 
 fn run(person: &Person, report: &mut Report) -> Run<()> {
     person.heading("anybox tester");
-    person.say(
-        "this checks how anybox does with your boxes and writes everything into one report you send back.",
-    );
-    person.say("");
-    person.say(
-        "it moves your cursor a little, clicks right, middle and the side buttons, presses and lets go of left \
-         while you're holding it, and holds F13, F14 and shift. it never types anything.",
-    );
-    person.say("");
-    person.say("before you start:");
-    person.say("  - close games and anything that reacts to clicks");
-    person.say("  - if anything ever stays held, unplugging the box lets go of it");
-    person.say("  - Ctrl+C stops the run at any time");
+    if !person.ready(
+        "this checks how anybox does with your boxes and writes everything into one report you send back.\n\n\
+         it moves your cursor a little, clicks right, middle and the side buttons, presses and lets go of left \
+         while you're holding it, and holds F13, F14 and shift. it never types anything, and the window on the \
+         right sees what arrives, so most checks judge themselves.\n\n\
+         before you start:\n\
+         - close games and anything that reacts to clicks\n\
+         - keep this window in front the whole time\n\
+         - if anything ever stays held, unplugging the box lets go of it\n\
+         - closing the window stops the run, anybox lets go of everything first",
+    )? {
+        return Ok(());
+    }
     let found = ports(person, report, "at the start");
+    let listed: Vec<String> = found
+        .iter()
+        .map(|port| match &port.port_type {
+            SerialPortType::UsbPort(usb) => format!(
+                "{} ({})",
+                port.port_name,
+                usb.product.as_deref().unwrap_or("USB")
+            ),
+            _ => port.port_name.clone(),
+        })
+        .collect();
 
     if !found.iter().any(is_ysc_left) {
         report.line("no YSC 8K command port (1A86:FE0C with serial TOWMCULEFT) found");
@@ -269,7 +311,10 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
     }
     if !ferrums.is_empty() || person.yes_no("do you have a Ferrum plugged in?")? == Some(true) {
         let port = person.answer(
-            "now the Ferrum's own port (the box itself, not the app), from the serial ports listed above",
+            &format!(
+                "now the Ferrum's own port, the box itself and not the app. the ports on this PC: {}",
+                listed.join(", ")
+            ),
             "like COM7, or just press Enter to skip it",
             "",
         )?;

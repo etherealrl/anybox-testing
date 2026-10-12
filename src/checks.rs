@@ -5,6 +5,7 @@ use anybox::{
     Action, Axis, Button, Click, Device, Direction, Error, Event, EventKinds, Events, Key, Quirk,
 };
 
+use crate::pad::{self, Seen};
 use crate::person::{Person, Run};
 use crate::report::{Outcome, Report};
 
@@ -17,6 +18,7 @@ const BUTTONS: [Button; 5] = [
     Button::Side1,
     Button::Side2,
 ];
+const AREA: &str = "the test area on the right";
 
 pub struct Checks<'a> {
     pub device: &'a Device,
@@ -40,8 +42,10 @@ pub fn drain(events: &Events) -> Vec<Event> {
 /// a timed part. it keeps reading the whole time, because the queue only holds so much and a fast mouse fills it
 /// in a second or two
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
-    person.say(format!("{text} ({} seconds)", wait.as_secs()).trim_start());
-    person.go();
+    if !text.is_empty() {
+        person.say(text);
+    }
+    person.go(wait);
     let mut seen = Vec::new();
     collect(person, events, wait, &mut seen)?;
     person.stop();
@@ -61,6 +65,13 @@ fn collect(person: &Person, events: &Events, wait: Duration, seen: &mut Vec<Even
             seen.push(event);
         }
     }
+}
+
+fn presses_of(events: &[Event], wanted: Button) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, Event::Button { button, pressed: true, .. } if *button == wanted))
+        .count()
 }
 
 fn buttons_in(events: &[Event]) -> usize {
@@ -151,7 +162,33 @@ fn passed_if(ok: bool) -> Outcome {
     if ok { Outcome::Passed } else { Outcome::Failed }
 }
 
+/// whether a move showed up going the way it was sent, by the bigger of the two axes
+fn went(seen: &[Seen], dx: i16, dy: i16) -> bool {
+    let (x, y) = pad::moved(seen);
+    if dx.abs() >= dy.abs() {
+        x != 0.0 && x.signum() == f32::from(dx).signum()
+    } else {
+        y != 0.0 && y.signum() == f32::from(dy).signum()
+    }
+}
+
 impl Checks<'_> {
+    /// judges what the window saw since the last clear. a dry run has no window, so it's only noted there
+    fn window(&mut self, name: &str, call: anybox::Result<()>, ok: impl FnOnce(&[Seen]) -> bool) {
+        if let Err(error) = call {
+            self.report.check(name, Outcome::Failed, &error.to_string());
+            return;
+        }
+        match self.person.seen() {
+            None => self
+                .report
+                .check(name, Outcome::Noted, "sent, no window in a dry run"),
+            Some(seen) => self
+                .report
+                .check(name, passed_if(ok(&seen)), &pad::summary(&seen)),
+        }
+    }
+
     pub fn identity(&mut self) {
         let snapshot = self.device.snapshot();
         self.report.line(&format!("{:?}", snapshot.info));
@@ -168,40 +205,49 @@ impl Checks<'_> {
         }
     }
 
-    /// everything that needs nobody, with the mouse parked over the desktop
+    /// everything that needs nobody. the window checks each move, scroll, click and key actually reached the PC
     pub fn automatic(&mut self) -> Run<()> {
         let person = self.person;
-        if !person.ready(
-            "next anybox moves your cursor in a small square, scrolls one notch each way and clicks right, middle and \
-             the side buttons. put your cursor over an empty spot of your desktop (NOT over this window, a right \
-             click in here pastes) and don't touch the mouse until it says done",
-        )? {
+        if !person.ready(&format!(
+            "anybox moves your cursor in a small square, scrolls one notch each way, clicks right, middle and the \
+             side buttons, and presses F13 and F14.\n\nput your cursor in {AREA} and don't touch the mouse or \
+             keyboard until it says done"
+        ))? {
             self.report.check("automatic part", Outcome::Skipped, "");
             return Ok(());
         }
-        person.wait(Duration::from_secs(3))?;
+        person.wait(Duration::from_secs(2))?;
+        let short = Duration::from_millis(300);
 
         let mut times = Vec::new();
-        let mut moved = Ok(());
         for (dx, dy) in [(100, 0), (0, 100), (-100, 0), (0, -100)] {
+            person.pad_clear();
             let at = Instant::now();
-            moved = moved.and(self.device.move_by(dx, dy));
+            let moved = self.device.move_by(dx, dy);
             times.push(format!("{:?}", at.elapsed()));
-            person.wait(Duration::from_millis(400))?;
+            person.wait(short)?;
+            self.window(&format!("move {dx} {dy} reached the PC"), moved, |seen| {
+                went(seen, dx, dy)
+            });
         }
-        let square = format!("each move took {}", times.join(", "));
-        result(self.report, "square of moves", moved, &square);
+        self.report
+            .line(&format!("each move call took {}", times.join(", ")));
         result(self.report, "zero move", self.device.move_by(0, 0), "");
 
-        for notches in [1, -1, 0] {
-            result(
-                self.report,
-                &format!("wheel {notches}"),
-                self.device.wheel(notches),
-                "",
+        for notches in [1i16, -1] {
+            person.pad_clear();
+            let scrolled = self.device.wheel(notches);
+            person.wait(short)?;
+            self.window(
+                &format!("wheel {notches} reached the PC"),
+                scrolled,
+                |seen| {
+                    let got = pad::wheel(seen);
+                    got != 0.0 && got.signum() == f32::from(notches).signum()
+                },
             );
-            person.wait(Duration::from_millis(300))?;
         }
+        result(self.report, "wheel 0", self.device.wheel(0), "");
         let limit = quirks(self.device, Action::Wheel)
             .iter()
             .find_map(|q| match q {
@@ -222,30 +268,56 @@ impl Checks<'_> {
         }
 
         for button in [Button::Right, Button::Middle, Button::Side1, Button::Side2] {
+            person.pad_clear();
             let pressed = self.device.press(button);
             person.wait(Duration::from_millis(60))?;
             let released = self.device.release(button);
-            result(
-                self.report,
-                &format!("press and release {button:?}"),
+            person.wait(short)?;
+            self.window(
+                &format!("press and release {button:?} reached the PC"),
                 pressed.and(released),
-                "",
+                |seen| pad::presses(seen, button) == 1 && pad::releases(seen, button) == 1,
             );
-            person.wait(Duration::from_millis(300))?;
         }
-        let at = Instant::now();
+
+        person.pad_clear();
         let clicked = self
             .device
             .click_with(Button::Right, Click::hold(Duration::from_millis(80)));
-        let took = format!("asked for an 80 ms hold, the call took {:?}", at.elapsed());
-        result(self.report, "right click with a host hold", clicked, &took);
+        person.wait(short)?;
+        let hold = self
+            .person
+            .seen()
+            .map(|seen| pad::first_hold(&seen, Button::Right));
+        match (clicked, hold) {
+            (Err(error), _) => self.report.check(
+                "right click with an 80 ms hold",
+                Outcome::Failed,
+                &error.to_string(),
+            ),
+            (Ok(()), None) => self.report.check(
+                "right click with an 80 ms hold",
+                Outcome::Noted,
+                "sent, no window in a dry run",
+            ),
+            (Ok(()), Some(hold)) => self.report.check(
+                "right click with an 80 ms hold",
+                passed_if(hold.is_some()),
+                &format!("the window saw it held for {hold:?}"),
+            ),
+        }
+
+        person.pad_clear();
         let repeated = (0..5).try_for_each(|_| self.device.click(Button::Middle));
-        result(self.report, "five middle clicks in a row", repeated, "");
+        person.wait(short)?;
+        self.window("five middle clicks in a row", repeated, |seen| {
+            pad::presses(seen, Button::Middle) == 5 && pad::releases(seen, Button::Middle) == 5
+        });
 
         self.refusals();
         self.keys()?;
 
-        // last, since the cursor ends up against a screen edge and nothing may click after it
+        // last, since the cursor ends up against a screen edge
         let boundary = self
             .device
             .move_by(i16::MAX, i16::MAX)
@@ -254,9 +326,12 @@ impl Checks<'_> {
             self.report,
             "i16 boundary moves",
             boundary,
-            "32767 each way then back, the cursor may have hit the screen edge",
+            "32767 each way then back",
         );
-        person.say("done, you can use your mouse again (press Escape if a menu opened)");
+        person.say(&format!(
+            "done. your cursor may be at a screen edge now, bring it back to {AREA}"
+        ));
+        person.wait(Duration::from_secs(2))?;
         Ok(())
     }
 
@@ -318,17 +393,24 @@ impl Checks<'_> {
             self.report.check("keys", Outcome::NotAvailable, &reason);
             return Ok(());
         }
+        let short = Duration::from_millis(300);
         let events = self.device.events();
+        self.person.pad_clear();
         let pressed = self.device.press_key(F13);
         self.person.wait(Duration::from_millis(100))?;
         let released = self.device.release_key(F13);
-        result(
-            self.report,
-            "F13 press and release",
+        self.person.wait(short)?;
+        self.window(
+            "F13 press and release reached the PC",
             pressed.and(released),
-            "",
+            |seen| pad::key_down(seen, "F13"),
         );
-        result(self.report, "F14 tap", self.device.tap_key(F14), "");
+        self.person.pad_clear();
+        let tapped = self.device.tap_key(F14);
+        self.person.wait(short)?;
+        self.window("F14 tap reached the PC", tapped, |seen| {
+            pad::key_down(seen, "F14")
+        });
         let shifted = self
             .device
             .press_key(Key::LEFT_SHIFT)
@@ -368,41 +450,51 @@ impl Checks<'_> {
 
     fn forced_release(&mut self) -> Run<()> {
         let name = "left held by you while anybox presses and releases it";
-        if !self.person.ready(
-            "when it says NOW (with a beep), hold the LEFT button down and keep holding it until it says done, with your cursor \
-             over the desktop",
-        )? {
+        if !self.person.ready(&format!(
+            "when it says NOW, hold the LEFT button down in {AREA} and keep holding it until it says done. anybox \
+             presses and lets go of left while you hold it"
+        ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
-        self.person.go();
+        self.person.go(Duration::from_millis(5500));
         self.person.wait(Duration::from_secs(3))?;
+        self.person.pad_clear();
         let pressed = self.device.press(Button::Left);
         self.person.wait(Duration::from_millis(500))?;
         let released = self.device.release(Button::Left);
         self.person.wait(Duration::from_secs(2))?;
+        let seen = self.person.seen();
         self.person.stop();
         self.person.say("you can let go now");
-        let seen = tally(&drain(&events));
-        result(self.report, name, pressed.and(released), &seen);
-        let stayed = self.person.yes_no(
-            "while you kept holding, was left still down at the end (it can come up for a moment when anybox lets go)?",
-        )?;
-        asked(
-            self.report,
-            "left stayed down after anybox let go",
-            stayed,
-            "",
-        );
+        let box_events = tally(&drain(&events));
+        if let Err(error) = pressed.and(released) {
+            self.report.check(name, Outcome::Failed, &error.to_string());
+            return Ok(());
+        }
+        match seen {
+            None => self
+                .report
+                .check(name, Outcome::Noted, &format!("box events: {box_events}")),
+            // the release can force left up for a moment, what matters is that your held button is down again
+            Some(seen) => self.report.check(
+                name,
+                passed_if(pad::ends_down(&seen, Button::Left) != Some(false)),
+                &format!(
+                    "the window saw: {}, box events: {box_events}",
+                    pad::buttons(&seen)
+                ),
+            ),
+        }
         Ok(())
     }
 
     fn every_input(&mut self) -> Run<()> {
-        if !self.person.ready(
-            "when it says NOW, click EVERY button on your mouse, move it, scroll up and down, and press a few keys on \
-             the keyboard behind the box if there is one",
-        )? {
+        if !self.person.ready(&format!(
+            "when it says NOW, click EVERY button on your mouse in {AREA}, move it, scroll up and down, and press a \
+             few keys on the keyboard behind the box if there is one"
+        ))? {
             self.report
                 .check("every kind of input", Outcome::Skipped, "");
             return Ok(());
@@ -411,24 +503,13 @@ impl Checks<'_> {
         let seen = gather(self.person, &events, "", Duration::from_secs(10))?;
         self.report
             .line(&format!("everything that came in: {}", tally(&seen)));
-        let pressed: Vec<Button> = seen
-            .iter()
-            .filter_map(|e| match e {
-                Event::Button {
-                    button,
-                    pressed: true,
-                    ..
-                } => Some(*button),
-                _ => None,
-            })
-            .collect();
         let snapshot = self.device.snapshot();
         let capabilities = &snapshot.capabilities;
         let each: [(&str, Action, bool); 4] = [
             (
                 "button events, all five buttons",
                 Action::ButtonEvents,
-                BUTTONS.iter().all(|b| pressed.contains(b)),
+                BUTTONS.iter().all(|b| presses_of(&seen, *b) > 0),
             ),
             (
                 "motion events",
@@ -495,16 +576,17 @@ impl Checks<'_> {
             self.report.check(name, Outcome::NotAvailable, "");
             return Ok(());
         }
-        if !self.person.ready(
-            "for 10 seconds after it says NOW, click LEFT a few times with your cursor over the desktop. anybox clicks \
-             middle every 2 seconds at the same time",
-        )? {
+        if !self.person.ready(&format!(
+            "when it says NOW, click LEFT a few times in {AREA} for 10 seconds. anybox clicks middle every 2 seconds \
+             at the same time"
+        ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
-        self.person.go();
-        let until = Instant::now() + self.person.scaled(Duration::from_secs(10));
+        let wait = Duration::from_secs(10);
+        self.person.go(wait);
+        let until = Instant::now() + self.person.scaled(wait);
         let mut clicks = 0;
         let mut sent = Ok(());
         while Instant::now() < until {
@@ -514,21 +596,9 @@ impl Checks<'_> {
         }
         self.person.stop();
         let seen = drain(&events);
-        let middle = seen
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    Event::Button {
-                        button: Button::Middle,
-                        pressed: true,
-                        ..
-                    }
-                )
-            })
-            .count();
         let detail = format!(
-            "anybox clicked middle {clicks} times and {middle} middle presses came back as events, all events: {}",
+            "anybox clicked middle {clicks} times and {} middle presses came back as events, all events: {}",
+            presses_of(&seen, Button::Middle),
             tally(&seen)
         );
         match sent {
@@ -540,8 +610,8 @@ impl Checks<'_> {
         Ok(())
     }
 
-    /// letters typed on the keyboard behind the box, while anybox holds shift. F13 would be the safer key but
-    /// hardly any keyboard has one
+    /// letters typed on the keyboard behind the box while anybox holds shift. F13 would be the safer key but hardly
+    /// any keyboard has one
     fn key_merge(&mut self) -> Run<()> {
         let name = "a key held by anybox merges with your typing";
         if !supported(self.device, Action::KeyPress) {
@@ -556,24 +626,28 @@ impl Checks<'_> {
                 .check(name, Outcome::NotAvailable, "no keyboard behind the box");
             return Ok(());
         }
-        let held = self.device.press_key(Key::LEFT_SHIFT);
-        let line = self.person.answer(
-            "anybox holds shift now, so type abc on the keyboard behind the box and press Enter",
-            "in lowercase with caps lock off, it should come out as ABC",
-            "ABC",
-        );
-        let released = self.device.release_key(Key::LEFT_SHIFT);
-        let line = line?;
-        let letters: Vec<char> = line.chars().filter(char::is_ascii_alphabetic).collect();
-        let upper = !letters.is_empty() && letters.iter().all(char::is_ascii_uppercase);
-        match held.and(released) {
-            Err(error) => self.report.check(name, Outcome::Failed, &error.to_string()),
-            Ok(()) => self.report.check(
-                name,
-                passed_if(upper),
-                &format!("typed {} letters, all uppercase {upper}", letters.len()),
-            ),
+        if !self.person.ready(
+            "when it says NOW, anybox holds shift. type abc on the keyboard behind the box (lowercase, caps lock off), \
+             it should come out as ABC",
+        )? {
+            self.report.check(name, Outcome::Skipped, "");
+            return Ok(());
         }
+        let wait = Duration::from_secs(6);
+        self.person.pad_clear();
+        let held = self.device.press_key(Key::LEFT_SHIFT);
+        self.person.go(wait);
+        let waited = self.person.wait(wait);
+        let released = self.device.release_key(Key::LEFT_SHIFT);
+        self.person.stop();
+        waited?;
+        self.window(name, held.and(released), |seen| {
+            let letters: Vec<char> = pad::text(seen)
+                .chars()
+                .filter(char::is_ascii_alphabetic)
+                .collect();
+            !letters.is_empty() && letters.iter().all(char::is_ascii_uppercase)
+        });
         Ok(())
     }
 
@@ -582,16 +656,17 @@ impl Checks<'_> {
             self.report.check("button locks", Outcome::NotAvailable, "");
             return Ok(());
         }
-        if !self.person.ready(
-            "next anybox locks your mouse buttons one at a time for 3 seconds each, it tells you which one. click \
-             that button a couple times with your cursor over the desktop, nothing should happen on screen",
-        )? {
+        if !self.person.ready(&format!(
+            "anybox locks your mouse buttons one at a time for 3 seconds each and tells you which one. click that \
+             button a couple times in {AREA}, the window shouldn't see those clicks"
+        ))? {
             self.report.check("button locks", Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
         for button in BUTTONS {
             let locked = self.device.lock_button(button);
+            self.person.pad_clear();
             let seen = gather(
                 self.person,
                 &events,
@@ -600,60 +675,33 @@ impl Checks<'_> {
             );
             let unlocked = self.device.unlock_button(button);
             let seen = seen?;
-            match locked.and(unlocked) {
-                Err(error) => self.report.check(
-                    &format!("{button:?} locked"),
-                    Outcome::Failed,
-                    &error.to_string(),
-                ),
-                Ok(()) => self.report.check(
-                    &format!("{button:?} locked, your clicks still came in as events"),
-                    // only a press of this button counts, a release can be late from the one before
-                    if seen.iter().any(|e| {
-                        matches!(e, Event::Button { button: b, pressed: true, .. } if *b == button)
-                    }) {
-                        Outcome::Passed
-                    } else {
-                        Outcome::Noted
-                    },
-                    &tally(&seen),
-                ),
-            }
+            let name = format!("{button:?} locked");
+            self.window(&name, locked.and(unlocked), |window| {
+                pad::presses(window, button) == 0
+            });
+            // only a press of this button counts, a release can be late from the one before
+            self.report.check(
+                &format!("{button:?} locked, your clicks still came in as events"),
+                if presses_of(&seen, button) > 0 {
+                    Outcome::Passed
+                } else {
+                    Outcome::Noted
+                },
+                &tally(&seen),
+            );
         }
-        let blocked = self
-            .person
-            .yes_no("did every button do nothing on screen while it was locked?")?;
-        asked(self.report, "button locks block your clicks", blocked, "");
 
-        // software output through a lock, right shows it best because a menu opens
-        if !self.person.ready(
-            "now right gets locked and anybox clicks right once itself. put your cursor over the desktop",
-        )? {
-            self.report
-                .check("anybox's own click goes through a lock", Outcome::Skipped, "");
-            return Ok(());
-        }
+        // software output through a lock
+        self.person.pad_clear();
         let locked = self.device.lock_button(Button::Right);
         self.person.wait(Duration::from_millis(300))?;
         let clicked = self.device.click(Button::Right);
         self.person.wait(Duration::from_millis(500))?;
         let unlocked = self.device.unlock_button(Button::Right);
-        if let Err(error) = locked.and(clicked).and(unlocked) {
-            self.report.check(
-                "anybox's own click goes through a lock",
-                Outcome::Failed,
-                &error.to_string(),
-            );
-            return Ok(());
-        }
-        let opened = self
-            .person
-            .yes_no("did a right click menu open (press Escape to close it)?")?;
-        asked(
-            self.report,
-            "anybox's own click goes through a lock",
-            opened,
-            "",
+        self.window(
+            "anybox's own right click goes through a right lock",
+            locked.and(clicked).and(unlocked),
+            |seen| pad::presses(seen, Button::Right) > 0,
         );
         Ok(())
     }
@@ -671,14 +719,15 @@ impl Checks<'_> {
             _ => ("up and down", "sideways"),
         };
         let text = if one_way {
-            "next anybox locks your mouse one way at a time for 8 seconds, first you can only go left, then only \
-             right, and it pushes the cursor sideways itself a few times. when it says NOW, move your mouse around in \
-             every direction"
-                .to_string()
+            format!(
+                "anybox locks your mouse one way at a time for 8 seconds, first you can only go left, then only \
+                 right, and it pushes the cursor sideways itself a few times. when it says NOW, move your mouse \
+                 around in every direction in {AREA} and watch the trail"
+            )
         } else {
             format!(
-                "next anybox locks your mouse {along} for 8 seconds and pushes the cursor {along} itself a few times. \
-                 when it says NOW, move your mouse around in every direction"
+                "anybox locks your mouse {along} for 8 seconds and pushes the cursor {along} itself a few times. \
+                 when it says NOW, move your mouse around in every direction in {AREA} and watch the trail"
             )
         };
         if !self.person.ready(&text)? {
@@ -692,7 +741,7 @@ impl Checks<'_> {
             Direction::Both
         };
         let mut done = self.device.lock_axis(axis, first);
-        self.person.go();
+        self.person.go(Duration::from_secs(8));
         let mut seen = Vec::new();
         for step in 0..4 {
             if one_way && step == 2 {
@@ -756,10 +805,9 @@ impl Checks<'_> {
             self.report.check(name, Outcome::NotAvailable, "");
             return Ok(());
         }
-        if !self
-            .person
-            .ready("for 5 seconds after it says NOW, click and move your mouse")?
-        {
+        if !self.person.ready(&format!(
+            "when it says NOW, click and move your mouse in {AREA} for 5 seconds"
+        ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
@@ -800,7 +848,7 @@ impl Checks<'_> {
         let name = "unplug and replug";
         if !self.person.ready(&format!(
             "last one for this box. anybox holds right and locks left, then you unplug {what}, wait 3 seconds and \
-             plug it back into the SAME USB port"
+             plug it back into the SAME USB port. keep your cursor in {AREA}"
         ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
@@ -817,7 +865,7 @@ impl Checks<'_> {
         let came_back =
             self.await_event(&events, &mut log, |e| matches!(e, Event::Disconnected))? && {
                 self.person
-                    .say("now plug it back in (anybox waits up to 60 seconds)");
+                    .say("now plug it back in, anybox waits up to 60 seconds");
                 self.await_event(&events, &mut log, |e| matches!(e, Event::Reconnected))?
             };
         let detail = format!(
@@ -841,59 +889,77 @@ impl Checks<'_> {
             "after it came back: {:?}",
             self.device.snapshot().info
         ));
-        if locked.is_some() {
-            let still = self.person.yes_no(
-                "click left a couple times over the desktop. does left still do nothing?",
-            )?;
-            asked(
-                self.report,
-                "left lock put back after the reconnect",
-                still,
-                "",
-            );
-            result(
-                self.report,
-                "unlock left after the reconnect",
-                self.device.unlock_button(Button::Left),
-                "",
-            );
-        }
+        self.person.say("it's back");
+
         // a box that keeps held buttons through a reconnect is allowed to, so it's only noted there
+        self.person.pad_clear();
+        self.person.wait(Duration::from_secs(1))?;
         let keeps = quirks(self.device, Action::Press).contains(&Quirk::KeepsHeld);
-        let up = self.person.yes_no(
-            "is right let go now (a right click over the desktop works like normal, not stuck held)?",
-        )?;
-        if keeps {
-            self.report.check(
+        let right = self
+            .person
+            .seen()
+            .map(|seen| (pad::ends_down(&seen, Button::Right), pad::buttons(&seen)));
+        match right {
+            None => {}
+            Some((down, seen)) if keeps => self.report.check(
                 "right after the reconnect",
                 Outcome::Noted,
-                &format!("the box keeps held buttons, let go: {up:?}"),
-            );
-        } else {
-            asked(self.report, "right let go after the reconnect", up, "");
+                &format!(
+                    "the box keeps held buttons, the window saw: {seen} (down at the end {down:?})"
+                ),
+            ),
+            Some((down, seen)) => self.report.check(
+                "right not held after the reconnect",
+                passed_if(down != Some(true)),
+                &format!("the window saw: {seen}"),
+            ),
         }
         let _ = self.device.release(Button::Right);
-        let after = self.device.events_of(EventKinds::BUTTONS);
-        let seen = gather(
-            self.person,
-            &after,
-            "click any button a few times",
-            Duration::from_secs(5),
-        )?;
-        self.report.check(
-            "button events after the reconnect",
-            passed_if(buttons_in(&seen) > 0),
-            &tally(&seen),
-        );
+
+        if locked.is_some() {
+            let after = self.device.events_of(EventKinds::BUTTONS);
+            self.person.pad_clear();
+            let seen = gather(
+                self.person,
+                &after,
+                &format!("click LEFT a few times in {AREA}, it should still be locked"),
+                Duration::from_secs(4),
+            )?;
+            let unlocked = self.device.unlock_button(Button::Left);
+            self.window(
+                "left lock put back after the reconnect",
+                unlocked,
+                |window| pad::presses(window, Button::Left) == 0,
+            );
+            self.report.check(
+                "button events after the reconnect",
+                passed_if(presses_of(&seen, Button::Left) > 0),
+                &tally(&seen),
+            );
+        } else {
+            let after = self.device.events_of(EventKinds::BUTTONS);
+            let seen = gather(
+                self.person,
+                &after,
+                &format!("click any button a few times in {AREA}"),
+                Duration::from_secs(4),
+            )?;
+            self.report.check(
+                "button events after the reconnect",
+                passed_if(buttons_in(&seen) > 0),
+                &tally(&seen),
+            );
+        }
         Ok(())
     }
 
-    /// the last thing before close, so close has something held to let go of, and the trace shows it does
+    /// the last thing before close, so close has something held to let go of, and the window sees it let go
     pub fn hold_for_close(&mut self) -> Run<()> {
         let name = "middle held when the box gets closed";
-        if !self.person.ready(
-            "last bit: anybox holds middle and then closes the box, which should let go of it. put your cursor over              the desktop",
-        )? {
+        if !self.person.ready(&format!(
+            "last bit: anybox holds middle and then closes the box, which should let go of it. keep your cursor in \
+             {AREA}"
+        ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
@@ -901,10 +967,12 @@ impl Checks<'_> {
             Ok(()) => self.report.check(
                 name,
                 Outcome::Noted,
-                "the trace after this shows what close sent",
+                "the line after close says what the window saw",
             ),
             Err(error) => self.report.check(name, Outcome::Failed, &error.to_string()),
         }
+        self.person.wait(Duration::from_millis(300))?;
+        self.person.pad_clear();
         Ok(())
     }
 
@@ -946,6 +1014,12 @@ pub fn close(device: &Device, person: &Person, report: &mut Report) {
                  unplug the box and plug it back in"
             ));
         }
+    }
+    if let Some(seen) = person.seen() {
+        std::thread::sleep(Duration::from_millis(300));
+        let after: Vec<Seen> = person.seen().unwrap_or_default();
+        let all: Vec<Seen> = seen.into_iter().chain(after).collect();
+        report.line(&format!("while closing {}", pad::summary(&all)));
     }
 }
 

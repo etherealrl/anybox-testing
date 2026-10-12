@@ -22,7 +22,7 @@ fn a_dry_run_goes_through_and_writes_a_clean_report() {
     assert!(status.success(), "{text}");
     assert!(text.contains(", 0 failed,"), "{text}");
     for check in [
-        "square of moves: passed",
+        "move 100 0 reached the PC: noted",
         "button events, all five buttons: passed",
         "unplug and replug: passed",
         "close: passed",

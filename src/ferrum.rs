@@ -26,12 +26,13 @@ fn ask(port: &str, bytes: &[u8]) -> Result<String, String> {
 pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     let name = "a press survives the port closing";
     if !person.ready(
-        "next it presses left on the bare port, closes and reopens it and reads left back, then lets go. put your \
-         cursor over an empty spot of the desktop",
+        "anybox presses left on the bare port, closes and reopens it and reads left back, then lets go. keep \
+         your cursor in the test area on the right",
     )? {
         report.check(name, Outcome::Skipped, "");
         return Ok(());
     }
+    person.pad_clear();
     let before = ask(port, b"km.left()\r\n");
     let press = ask(port, b"km.left(1)\r\n");
     let after = ask(port, b"km.left()\r\n");
@@ -40,8 +41,13 @@ pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> 
         std::thread::sleep(Duration::from_millis(500));
         release = ask(port, b"km.left(0)\r\n");
     }
+    std::thread::sleep(Duration::from_millis(300));
+    let window = person
+        .seen()
+        .map(|seen| crate::pad::buttons(&seen))
+        .unwrap_or_default();
     let detail = format!(
-        "before {before:?}, press {press:?}, after reopening {after:?}, release {release:?}"
+        "before {before:?}, press {press:?}, after reopening {after:?}, release {release:?}, the window saw {window}"
     );
     if release.is_err() {
         report.check(name, Outcome::Failed, &detail);
