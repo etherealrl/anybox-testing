@@ -111,11 +111,12 @@ impl Checks<'_> {
 
 pub(super) fn button_name(button: Button) -> &'static str {
     match button {
-        Button::Left => "left",
-        Button::Right => "right",
-        Button::Middle => "middle",
-        Button::Side1 => "side 1",
-        Button::Side2 => "side 2",
+        Button::Left => "left button",
+        Button::Right => "right button",
+        Button::Middle => "middle button (press the wheel)",
+        // windows calls these back and forward, back is the one closer to your wrist on most mice
+        Button::Side1 => "back side button (closer to you)",
+        Button::Side2 => "front side button (further from you)",
         _ => "button",
     }
 }

@@ -21,7 +21,7 @@ impl Checks<'_> {
             }
             let log = self.acquire(
                 &events,
-                &format!("click {} once in the box below", button_name(button)),
+                &format!("click the {} once in the box below", button_name(button)),
                 |log, window| {
                     (self.person.scripted() || window_pair(window, button))
                         && (!supported(self.device, Action::ButtonEvents)

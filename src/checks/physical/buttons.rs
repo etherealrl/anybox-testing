@@ -42,7 +42,7 @@ impl Checks<'_> {
             let log = gather(
                 self.person,
                 &events,
-                &format!("click {} twice now", button_name(button)),
+                &format!("click the {} twice now", button_name(button)),
                 Duration::from_secs(3),
             );
             let log = match log {

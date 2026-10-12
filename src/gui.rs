@@ -45,8 +45,8 @@ impl App {
                 (PointerButton::Primary, "left"),
                 (PointerButton::Secondary, "right"),
                 (PointerButton::Middle, "middle"),
-                (PointerButton::Extra1, "side 1"),
-                (PointerButton::Extra2, "side 2"),
+                (PointerButton::Extra1, "the back side button"),
+                (PointerButton::Extra2, "the front side button"),
             ]
             .into_iter()
             .filter(|(button, _)| i.pointer.button_down(*button))
