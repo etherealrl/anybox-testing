@@ -23,12 +23,14 @@ fn ask(port: &str, bytes: &[u8]) -> Result<String, String> {
 /// everything first. nothing in between can stop the run, so the release always goes out
 pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     let name = "a press survives the port closing";
-    if !person.ready("we'll hold left across a port reopen, then let go")? {
+    if !person
+        .ready("anybox holds left across a port reopen, then lets go. hands off the whole time")?
+    {
         report.check(name, Outcome::Skipped, "");
         return Ok(());
     }
     person.pad_clear();
-    person.action("don't touch anything", Duration::from_secs(2));
+    person.action("hands off, don't touch anything", Duration::from_secs(2));
     let before = ask(port, b"km.left()\r\n");
     let press = ask(port, b"km.left(1)\r\n");
     let after = ask(port, b"km.left()\r\n");

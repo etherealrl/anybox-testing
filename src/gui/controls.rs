@@ -1,6 +1,21 @@
 use super::*;
 use crate::person::View;
 
+const GO: Color32 = Color32::from_rgb(40, 140, 70);
+const SKIP: Color32 = Color32::from_rgb(85, 85, 85);
+const NO: Color32 = Color32::from_rgb(160, 60, 60);
+const AGAIN: Color32 = Color32::from_rgb(170, 120, 30);
+
+/// the buttons that move the run along, big and colored so the right one is obvious at a glance
+pub(super) fn big(ui: &mut egui::Ui, text: &str, color: Color32) -> bool {
+    ui.add(
+        egui::Button::new(RichText::new(text).size(22.0).color(Color32::WHITE))
+            .fill(color)
+            .min_size(egui::vec2(160.0, 48.0)),
+    )
+    .clicked()
+}
+
 impl App {
     pub(super) fn send(&self, view: &View, answer: Answer) {
         let _ = self.ui.answer.send(Reply {
@@ -21,30 +36,32 @@ impl App {
             }
             Phase::Card => {
                 ui.horizontal(|ui| {
-                    if ui.button("start").clicked() {
+                    if big(ui, "start", GO) {
                         self.send(view, Answer::Start);
                     }
-                    if ui.button("skip").clicked() {
+                    if big(ui, "skip", SKIP) {
                         self.send(view, Answer::Skip);
                     }
                 });
             }
             Phase::Confirm => {
-                if ui.button("ready").clicked() {
-                    self.send(view, Answer::Start);
-                }
-                if ui.button("skip").clicked() {
-                    self.send(view, Answer::Skip);
-                }
+                ui.horizontal(|ui| {
+                    if big(ui, "ready", GO) {
+                        self.send(view, Answer::Start);
+                    }
+                    if big(ui, "skip", SKIP) {
+                        self.send(view, Answer::Skip);
+                    }
+                });
             }
             Phase::Question => {
                 ui.horizontal(|ui| {
-                    for (label, answer) in [
-                        ("yes", Answer::Yes),
-                        ("no", Answer::No),
-                        ("not sure", Answer::Skip),
+                    for (label, answer, color) in [
+                        ("yes", Answer::Yes, GO),
+                        ("no", Answer::No, NO),
+                        ("not sure", Answer::Skip, SKIP),
                     ] {
-                        if ui.button(label).clicked() {
+                        if big(ui, label, color) {
                             self.send(view, answer);
                         }
                     }
@@ -71,24 +88,15 @@ impl App {
             }
             Phase::Result => {
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(if view.reconnect_failed {
-                            "skip remaining tests"
-                        } else {
-                            "next"
-                        })
-                        .clicked()
-                    {
+                    let (next, retry) = if view.reconnect_failed {
+                        ("skip remaining tests", "retry reconnect")
+                    } else {
+                        ("next", "retry")
+                    };
+                    if big(ui, next, GO) {
                         self.send(view, Answer::Next);
                     }
-                    if ui
-                        .button(if view.reconnect_failed {
-                            "retry reconnect"
-                        } else {
-                            "retry"
-                        })
-                        .clicked()
-                    {
+                    if big(ui, retry, AGAIN) {
                         self.send(view, Answer::Retry);
                     }
                 });

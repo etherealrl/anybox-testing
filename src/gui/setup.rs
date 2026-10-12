@@ -66,6 +66,15 @@ pub fn draw(ui: &mut egui::Ui, setup: &mut Setup) -> bool {
     }
     ui.add_space(12.0);
     ui.label("close games and keep this window in front, because the tests send clicks and keys");
-    ui.add_enabled(setup.picked, egui::Button::new("connect"))
-        .clicked()
+    ui.add_enabled(
+        setup.picked,
+        egui::Button::new(
+            egui::RichText::new("connect")
+                .size(22.0)
+                .color(egui::Color32::WHITE),
+        )
+        .fill(egui::Color32::from_rgb(40, 140, 70))
+        .min_size(egui::vec2(160.0, 48.0)),
+    )
+    .clicked()
 }

@@ -44,7 +44,7 @@ pub fn drain(events: &Events) -> Vec<Event> {
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
     person.action(
         if text.is_empty() {
-            "don't touch anything"
+            "hands off, don't touch anything"
         } else {
             text
         },

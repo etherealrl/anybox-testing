@@ -33,11 +33,13 @@ fn refused_presses(events: &[Event]) -> u64 {
 /// with no keyboard behind it the box answers a key with a 404. anybox only blames a refusal on a press when
 /// presses were the only key action sent, so each case needs its own fresh open
 pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> {
-    if !person.ready("we'll check how the box refuses keys without a keyboard")? {
+    if !person.ready(
+        "we'll check how the box refuses keys without a keyboard, hands off the whole time",
+    )? {
         report.check("no keyboard diagnostic", Outcome::Skipped, "");
         return Ok(());
     }
-    person.action("don't touch anything", Duration::from_secs(1));
+    person.action("hands off, don't touch anything", Duration::from_secs(1));
 
     let name = "no keyboard, presses only";
     match open(port) {
@@ -63,7 +65,7 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
     }
 
     let name = "no keyboard, a press and a release";
-    person.action("don't touch anything", Duration::from_secs(1));
+    person.action("hands off, don't touch anything", Duration::from_secs(1));
     let second = match open(port) {
         Ok(device) => device,
         Err(error) => {
@@ -114,7 +116,7 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
                     v.phase = Phase::Active;
                 });
             }
-            person.action("don't touch anything", Duration::from_secs(2));
+            person.action("hands off, don't touch anything", Duration::from_secs(2));
             person.wait(Duration::from_secs(2))?;
             report.line(&format!(
                 "events during the swap {}",
@@ -147,7 +149,7 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
         Err(error) => report.check(name, Outcome::Failed, &error.to_string()),
         Ok(third) => closing(&third, person, report, |report| {
             person.pad_clear();
-            person.action("don't touch anything", Duration::from_secs(1));
+            person.action("hands off, don't touch anything", Duration::from_secs(1));
             let events = third.events();
             let tapped = third.tap_key(F14);
             person.wait(Duration::from_secs(1))?;

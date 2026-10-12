@@ -43,7 +43,7 @@ impl Checks<'_> {
                 self.person,
                 &events,
                 &format!("click the {} twice now", button_name(button)),
-                Duration::from_secs(3),
+                Duration::from_secs(5),
             );
             let log = match log {
                 Ok(log) => log,
@@ -61,10 +61,10 @@ impl Checks<'_> {
             let suppressed = self.person.seen().map(|w| pad::presses(&w, button) == 0);
             // a moment to take your hands off before anybox clicks, the bar above shows it
             self.person.action(
-                "hands off, anybox clicks it next",
-                Duration::from_millis(1500),
+                "stop now, hands off, anybox clicks it next",
+                Duration::from_secs(2),
             );
-            self.person.wait(Duration::from_millis(1500))?;
+            self.person.wait(Duration::from_secs(2))?;
             self.person.pad_clear();
             let clicked = self.device.click(button);
             let waited = self.person.wait(Duration::from_millis(500));

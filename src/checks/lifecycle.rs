@@ -6,17 +6,18 @@ impl Checks<'_> {
             ui.change(|v| v.reconnect_failed = false);
         }
         let name = "unplug and replug";
-        if !self
-            .person
-            .ready("anybox will hold right and lock left before you unplug the box")?
-        {
+        if !self.person.ready(
+            "anybox holds right and locks left, hands off until it tells you to unplug the box",
+        )? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events();
         self.person.pad_clear();
-        self.person
-            .action("don't touch anything", Duration::from_millis(500));
+        self.person.action(
+            "hands off, don't touch anything",
+            Duration::from_millis(500),
+        );
         let held = self.device.press(Button::Right);
         let mut log = Vec::new();
         collect(self.person, &events, Duration::from_millis(500), &mut log)?;
@@ -90,10 +91,24 @@ impl Checks<'_> {
                 .cue("the box didn't come back, retry reconnect or save the report");
             return Ok(());
         }
+        // the box comes back before the device plugged into it does, and until then it can't press or release
+        let wanted = if self.person.keyboard() {
+            Action::KeyPress
+        } else {
+            Action::Press
+        };
+        self.person.action(
+            "it's back, waiting for your device behind the box. hands off",
+            Duration::from_secs(15),
+        );
+        let until = Instant::now() + self.person.scaled(Duration::from_secs(15));
+        while !supported(self.device, wanted) && Instant::now() < until {
+            collect(self.person, &events, Duration::from_millis(200), &mut log)?;
+        }
         self.identity();
         self.person
-            .action("don't touch anything", Duration::from_secs(1));
-        collect(self.person, &events, Duration::from_secs(1), &mut log)?;
+            .action("hands off, don't touch anything", Duration::from_secs(2));
+        collect(self.person, &events, Duration::from_secs(2), &mut log)?;
         let state = self
             .person
             .seen()
@@ -161,8 +176,8 @@ impl Checks<'_> {
                 let log = gather(
                     self.person,
                     &events,
-                    "click left twice now",
-                    Duration::from_secs(4),
+                    "click the left button twice now, it should still be locked",
+                    Duration::from_secs(6),
                 );
                 let unlocked = self.device.unlock_button(Button::Left);
                 let log = log?;
@@ -210,7 +225,7 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("anybox will hold middle, then close the connection")?
+            .ready("anybox holds middle and closes the connection, hands off the whole time")?
         {
             self.report
                 .check("middle held when the box gets closed", Outcome::Skipped, "");
@@ -218,7 +233,7 @@ impl Checks<'_> {
         }
         self.person.pad_clear();
         self.person
-            .action("don't touch anything", Duration::from_secs(1));
+            .action("hands off, don't touch anything", Duration::from_secs(1));
         let call = if self.person.can_position() {
             self.device.press(Button::Middle)
         } else {

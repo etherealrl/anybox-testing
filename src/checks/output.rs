@@ -3,7 +3,7 @@ impl Checks<'_> {
     pub fn automatic(&mut self) -> Run<()> {
         if !self
             .person
-            .ready("anybox will send small moves, clicks, scrolls, and keys")?
+            .ready("anybox sends small moves, clicks, scrolls and keys. hands off the whole time")?
         {
             self.report.check("automatic output", Outcome::Skipped, "");
             return Ok(());
@@ -34,7 +34,7 @@ impl Checks<'_> {
         if supported(self.device, Action::Move) {
             for (dx, dy) in [(100, 0), (0, 100), (-100, 0), (0, -100)] {
                 self.person.pad_clear();
-                self.person.action("don't touch anything", short);
+                self.person.action("hands off, don't touch anything", short);
                 let at = Instant::now();
                 let call = self.device.move_by(dx, dy);
                 self.report
@@ -97,7 +97,7 @@ impl Checks<'_> {
         if supported(self.device, Action::Wheel) {
             for notches in [1i16, -1] {
                 self.person.pad_clear();
-                self.person.action("don't touch anything", short);
+                self.person.action("hands off, don't touch anything", short);
                 let call = self.device.wheel(notches);
                 self.person.wait(short)?;
                 self.window(&format!("wheel {notches} reached the PC"), call, |w| {
@@ -132,7 +132,7 @@ impl Checks<'_> {
                 continue;
             }
             self.person.pad_clear();
-            self.person.action("don't touch anything", short);
+            self.person.action("hands off, don't touch anything", short);
             let pressed = self.device.press(button);
             let waited = self.person.wait(Duration::from_millis(60));
             let released = self.device.release(button);
@@ -216,7 +216,7 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("the cursor may reach the screen edge, then we'll bring it back")?
+            .ready("anybox sends huge moves, your cursor will hit the screen edge. hands off until it's done")?
         {
             self.report
                 .check("i16 boundary moves", Outcome::Skipped, "");
@@ -239,8 +239,10 @@ impl Checks<'_> {
         for axis in [Axis::X, Axis::Y] {
             for amount in [i16::MAX, -i16::MAX, i16::MIN, i16::MAX, 1] {
                 self.person.pad_clear();
-                self.person
-                    .action("don't touch anything", Duration::from_millis(500));
+                self.person.action(
+                    "hands off, don't touch anything",
+                    Duration::from_millis(500),
+                );
                 let (dx, dy) = if axis == Axis::X {
                     (amount, 0)
                 } else {
@@ -351,7 +353,7 @@ impl Checks<'_> {
         } else {
             self.person.pad_clear();
             self.person
-                .action("don't touch anything", Duration::from_secs(1));
+                .action("hands off, don't touch anything", Duration::from_secs(1));
             let pressed = self.device.press_key(F13);
             let waited = self.person.wait(Duration::from_millis(100));
             let released = self.device.release_key(F13);

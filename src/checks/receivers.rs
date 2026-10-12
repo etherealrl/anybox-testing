@@ -86,8 +86,8 @@ impl Checks<'_> {
         }
         drop((all, buttons));
         self.person
-            .action("don't touch anything", Duration::from_secs(1));
-        self.person.wait(Duration::from_secs(1))?;
+            .action("stop now, hands off for a moment", Duration::from_secs(2));
+        self.person.wait(Duration::from_secs(2))?;
         let again = self.device.events();
         let log = self
             .acquire(
