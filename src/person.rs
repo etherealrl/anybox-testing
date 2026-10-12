@@ -82,6 +82,14 @@ impl Person {
         let _ = io::stdout().flush();
     }
 
+    pub fn stopped(&self) -> Run<()> {
+        if STOP.load(Ordering::Acquire) {
+            Err(Stopped)
+        } else {
+            Ok(())
+        }
+    }
+
     /// a dry run waits a twentieth of the time, the mock box needs no time to react
     pub fn scaled(&self, wait: Duration) -> Duration {
         if self.scripted { wait / 20 } else { wait }
@@ -93,18 +101,10 @@ impl Person {
             if STOP.load(Ordering::Acquire) {
                 return Err(Stopped);
             }
-            std::thread::sleep(Duration::from_millis(20).min(until - Instant::now()));
+            std::thread::sleep(
+                Duration::from_millis(20).min(until.saturating_duration_since(Instant::now())),
+            );
         }
-        Ok(())
-    }
-
-    /// a timed part: says what to do, beeps, then counts down so they know how long is left
-    pub fn timed(&self, text: &str, wait: Duration) -> Run<()> {
-        self.say(&format!("{text} ({} seconds)", wait.as_secs()));
-        self.beep();
-        self.wait(wait)?;
-        self.beep();
-        self.say("done");
         Ok(())
     }
 }

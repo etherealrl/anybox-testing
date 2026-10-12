@@ -33,12 +33,41 @@ fn quirks(device: &Device, action: Action) -> Vec<Quirk> {
 }
 
 /// everything that came in so far, without waiting
-fn drain(events: &Events) -> Vec<Event> {
+pub fn drain(events: &Events) -> Vec<Event> {
     std::iter::from_fn(|| events.try_recv().ok()).collect()
 }
 
+/// a timed part. it keeps reading the whole time, because the queue only holds so much and a fast mouse fills it
+/// in a second or two
+pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
+    person.say(&format!("{text} ({} seconds)", wait.as_secs()));
+    person.beep();
+    let until = Instant::now() + person.scaled(wait);
+    let mut seen = Vec::new();
+    loop {
+        person.stopped()?;
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        if let Ok(event) = events.recv_timeout(left.min(Duration::from_millis(50))) {
+            seen.push(event);
+        }
+    }
+    person.beep();
+    person.say("done");
+    Ok(seen)
+}
+
+fn buttons_in(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, Event::Button { .. }))
+        .count()
+}
+
 /// what came in, counted by kind, so a report line stays short even after a lot of movement
-fn tally(events: &[Event]) -> String {
+pub fn tally(events: &[Event]) -> String {
     let mut counts: BTreeMap<String, u64> = BTreeMap::new();
     let (mut dx, mut dy, mut wheel, mut pan) = (0i64, 0i64, 0i64, 0i64);
     for event in events {
@@ -114,6 +143,10 @@ fn asked(report: &mut Report, name: &str, answer: Option<bool>, detail: &str) {
     report.check(name, outcome, detail);
 }
 
+fn passed_if(ok: bool) -> Outcome {
+    if ok { Outcome::Passed } else { Outcome::Failed }
+}
+
 impl Checks<'_> {
     pub fn identity(&mut self) {
         let snapshot = self.device.snapshot();
@@ -154,19 +187,7 @@ impl Checks<'_> {
         }
         let square = format!("each move took {}", times.join(", "));
         result(self.report, "square of moves", moved, &square);
-
         result(self.report, "zero move", self.device.move_by(0, 0), "");
-        let boundary = self
-            .device
-            .move_by(i16::MAX, i16::MAX)
-            .and(self.device.move_by(-i16::MAX, -i16::MAX));
-        result(
-            self.report,
-            "i16 boundary moves",
-            boundary,
-            "32767 each way then back, the cursor may have hit the screen edge",
-        );
-        person.wait(Duration::from_millis(400))?;
 
         for notches in [1, -1, 0] {
             result(
@@ -219,6 +240,18 @@ impl Checks<'_> {
 
         self.refusals();
         self.keys()?;
+
+        // last, since the cursor ends up against a screen edge and nothing may click after it
+        let boundary = self
+            .device
+            .move_by(i16::MAX, i16::MAX)
+            .and(self.device.move_by(-i16::MAX, -i16::MAX));
+        result(
+            self.report,
+            "i16 boundary moves",
+            boundary,
+            "32767 each way then back, the cursor may have hit the screen edge",
+        );
         person.say("done, you can use your mouse again (press Escape if a menu opened)");
         Ok(())
     }
@@ -281,6 +314,7 @@ impl Checks<'_> {
             self.report.check("keys", Outcome::NotAvailable, &reason);
             return Ok(());
         }
+        let events = self.device.events();
         let pressed = self.device.press_key(F13);
         self.person.wait(Duration::from_millis(100))?;
         let released = self.device.release_key(F13);
@@ -302,6 +336,15 @@ impl Checks<'_> {
             shifted.and(unshifted),
             "",
         );
+        // a box that refuses keys only says so after the call returned
+        self.person.wait(Duration::from_secs(1))?;
+        let seen = drain(&events);
+        let refused = seen.iter().any(|e| matches!(e, Event::Rejected { .. }));
+        self.report.check(
+            "no key refused afterwards",
+            passed_if(!refused),
+            &tally(&seen),
+        );
         Ok(())
     }
 
@@ -322,7 +365,8 @@ impl Checks<'_> {
     fn forced_release(&mut self) -> Run<()> {
         let name = "left held by you while anybox presses and releases it";
         if !self.person.ready(
-            "hold the LEFT button down after the beep and keep holding it until the second beep",
+            "hold the LEFT button down after the beep and keep holding it until the second beep, with your cursor \
+             over the desktop",
         )? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
@@ -351,30 +395,76 @@ impl Checks<'_> {
     }
 
     fn every_input(&mut self) -> Run<()> {
-        let name = "every kind of input shows up as events";
         if !self.person.ready(
-            "after the beep click every button on your mouse, move it, scroll, and press a few keys on the keyboard \
-             behind the box if there is one",
+            "after the beep click EVERY button on your mouse, move it, scroll up and down, and press a few keys on \
+             the keyboard behind the box if there is one",
         )? {
-            self.report.check(name, Outcome::Skipped, "");
+            self.report
+                .check("every kind of input", Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events();
-        self.person.timed("go", Duration::from_secs(15))?;
-        let seen = drain(&events);
-        let buttons = seen.iter().any(|e| matches!(e, Event::Button { .. }));
-        let motion = seen.iter().any(|e| matches!(e, Event::Motion { .. }));
-        let outcome = if buttons && motion {
-            Outcome::Passed
-        } else {
-            Outcome::Failed
-        };
-        self.report.check(name, outcome, &tally(&seen));
+        let seen = gather(self.person, &events, "go", Duration::from_secs(10))?;
+        self.report
+            .line(&format!("everything that came in: {}", tally(&seen)));
+        let pressed: Vec<Button> = seen
+            .iter()
+            .filter_map(|e| match e {
+                Event::Button {
+                    button,
+                    pressed: true,
+                    ..
+                } => Some(*button),
+                _ => None,
+            })
+            .collect();
+        let snapshot = self.device.snapshot();
+        let capabilities = &snapshot.capabilities;
+        let each: [(&str, Action, bool); 4] = [
+            (
+                "button events, all five buttons",
+                Action::ButtonEvents,
+                BUTTONS.iter().all(|b| pressed.contains(b)),
+            ),
+            (
+                "motion events",
+                Action::MotionEvents,
+                seen.iter()
+                    .any(|e| matches!(e, Event::Motion { dx, dy, .. } if *dx != 0 || *dy != 0)),
+            ),
+            (
+                "wheel events",
+                Action::MotionEvents,
+                seen.iter()
+                    .any(|e| matches!(e, Event::Motion { wheel, .. } if *wheel != 0)),
+            ),
+            (
+                "key events",
+                Action::KeyEvents,
+                seen.iter().any(|e| matches!(e, Event::Key { .. })),
+            ),
+        ];
+        for (name, action, ok) in each {
+            let capability = capabilities.get(action);
+            if capability.is_supported() {
+                self.report.check(name, passed_if(ok), "");
+            } else {
+                self.report.check(
+                    name,
+                    Outcome::NotAvailable,
+                    &format!("{:?}", capability.execution),
+                );
+            }
+        }
         Ok(())
     }
 
     fn fast_motion(&mut self) -> Run<()> {
         let name = "fast motion, events per second and losses";
+        if !supported(self.device, Action::MotionEvents) {
+            self.report.check(name, Outcome::NotAvailable, "");
+            return Ok(());
+        }
         if !self
             .person
             .ready("after the beep move your mouse around fast in circles until the second beep")?
@@ -384,27 +474,23 @@ impl Checks<'_> {
         }
         let events = self.device.events_of(EventKinds::MOTION);
         let wait = Duration::from_secs(5);
-        self.person.timed("go", wait)?;
-        let seen = drain(&events);
+        let seen = gather(self.person, &events, "go", wait)?;
         let motion = seen
             .iter()
             .filter(|e| matches!(e, Event::Motion { .. }))
             .count();
-        let lost: u64 = seen
-            .iter()
-            .map(|e| match e {
-                Event::Dropped { count, .. } => *count,
-                _ => 0,
-            })
-            .sum();
         let rate = motion as f64 / self.person.scaled(wait).as_secs_f64();
-        let detail = format!("{motion} motion events, about {rate:.0} a second, {lost} lost");
+        let detail = format!("about {rate:.0} motion events a second, {}", tally(&seen));
         self.report.check(name, Outcome::Noted, &detail);
         Ok(())
     }
 
     fn own_output_in_events(&mut self) -> Run<()> {
         let name = "whether events show what anybox sends";
+        if !supported(self.device, Action::ButtonEvents) {
+            self.report.check(name, Outcome::NotAvailable, "");
+            return Ok(());
+        }
         if !self.person.ready(
             "for 10 seconds after the beep, click LEFT a few times with your cursor over the desktop. anybox clicks \
              middle every 2 seconds at the same time",
@@ -450,80 +536,117 @@ impl Checks<'_> {
         Ok(())
     }
 
+    /// letters typed on the keyboard behind the box, while anybox holds shift. F13 would be the safer key but
+    /// hardly any keyboard has one
     fn key_merge(&mut self) -> Run<()> {
         let name = "a key held by anybox merges with your typing";
         if !supported(self.device, Action::KeyPress) {
             self.report.check(name, Outcome::NotAvailable, "no keys");
             return Ok(());
         }
-        let typed = self
+        let keyboard = self
             .person
             .yes_no("is there a keyboard plugged into the box?")?;
-        if typed != Some(true) {
+        if keyboard != Some(true) {
             self.report
                 .check(name, Outcome::NotAvailable, "no keyboard behind the box");
             return Ok(());
         }
         let held = self.device.press_key(Key::LEFT_SHIFT);
         let line = self.person.answer(
-            "anybox holds shift now, so type a few letters on the keyboard behind the box and press Enter:",
+            "anybox holds shift now, so type abc in lowercase on the keyboard behind the box (caps lock off) and \
+             press Enter:",
             "ABC",
         );
         let released = self.device.release_key(Key::LEFT_SHIFT);
         let line = line?;
-        let upper = !line.is_empty() && line.chars().all(|c| !c.is_ascii_lowercase());
+        let letters: Vec<char> = line.chars().filter(char::is_ascii_alphabetic).collect();
+        let upper = !letters.is_empty() && letters.iter().all(char::is_ascii_uppercase);
         match held.and(released) {
             Err(error) => self.report.check(name, Outcome::Failed, &error.to_string()),
             Ok(()) => self.report.check(
                 name,
-                if upper {
-                    Outcome::Passed
-                } else {
-                    Outcome::Failed
-                },
-                &format!("typed {line:?}"),
+                passed_if(upper),
+                &format!("typed {} letters, all uppercase {upper}", letters.len()),
             ),
         }
         Ok(())
     }
 
     fn button_locks(&mut self) -> Run<()> {
-        let name = "all five buttons locked";
         if !supported(self.device, Action::LockButton) {
-            self.report.check(name, Outcome::NotAvailable, "");
+            self.report.check("button locks", Outcome::NotAvailable, "");
             return Ok(());
         }
         if !self.person.ready(
-            "next anybox locks every mouse button for 8 seconds. after the beep click each button a couple times \
-             with your cursor over the desktop, nothing should happen on screen",
+            "next anybox locks your mouse buttons one at a time for 3 seconds each, it tells you which one. click \
+             that button a couple times with your cursor over the desktop, nothing should happen on screen",
         )? {
-            self.report.check(name, Outcome::Skipped, "");
+            self.report.check("button locks", Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::BUTTONS);
-        let locked: anybox::Result<()> =
-            BUTTONS.iter().try_for_each(|b| self.device.lock_button(*b));
-        let waited = self.person.timed("go", Duration::from_secs(8));
-        // every unlock gets tried even after one fails, a button left locked is the worst outcome here
-        let unlocks: Vec<anybox::Result<()>> = BUTTONS
-            .iter()
-            .map(|b| self.device.unlock_button(*b))
-            .collect();
-        let unlocked: anybox::Result<()> = unlocks.into_iter().collect();
-        waited?;
-        let seen = tally(&drain(&events));
-        if let Err(error) = locked.and(unlocked) {
-            self.report.check(name, Outcome::Failed, &error.to_string());
-            return Ok(());
+        for button in BUTTONS {
+            let locked = self.device.lock_button(button);
+            let seen = gather(
+                self.person,
+                &events,
+                &format!("{button:?} is locked, click it"),
+                Duration::from_secs(3),
+            );
+            let unlocked = self.device.unlock_button(button);
+            let seen = seen?;
+            match locked.and(unlocked) {
+                Err(error) => self.report.check(
+                    &format!("{button:?} locked"),
+                    Outcome::Failed,
+                    &error.to_string(),
+                ),
+                Ok(()) => self.report.check(
+                    &format!("{button:?} locked, your clicks still came in as events"),
+                    if buttons_in(&seen) > 0 {
+                        Outcome::Passed
+                    } else {
+                        Outcome::Noted
+                    },
+                    &tally(&seen),
+                ),
+            }
         }
         let blocked = self
             .person
-            .yes_no("did your clicks do nothing on screen?")?;
+            .yes_no("did every button do nothing on screen while it was locked?")?;
+        asked(self.report, "button locks block your clicks", blocked, "");
+
+        // software output through a lock, right shows it best because a menu opens
+        if !self.person.ready(
+            "now right gets locked and anybox clicks right once itself. put your cursor over the desktop",
+        )? {
+            self.report
+                .check("anybox's own click goes through a lock", Outcome::Skipped, "");
+            return Ok(());
+        }
+        let locked = self.device.lock_button(Button::Right);
+        self.person.wait(Duration::from_millis(300))?;
+        let clicked = self.device.click(Button::Right);
+        self.person.wait(Duration::from_millis(500))?;
+        let unlocked = self.device.unlock_button(Button::Right);
+        if let Err(error) = locked.and(clicked).and(unlocked) {
+            self.report.check(
+                "anybox's own click goes through a lock",
+                Outcome::Failed,
+                &error.to_string(),
+            );
+            return Ok(());
+        }
+        let opened = self
+            .person
+            .yes_no("did a right click menu open (press Escape to close it)?")?;
         asked(
             self.report,
-            name,
-            blocked,
-            &format!("events while locked: {seen}"),
+            "anybox's own click goes through a lock",
+            opened,
+            "",
         );
         Ok(())
     }
@@ -534,47 +657,84 @@ impl Checks<'_> {
             self.report.check(&name, Outcome::NotAvailable, "");
             return Ok(());
         }
+        let one_way = axis == Axis::X
+            && !quirks(self.device, Action::LockAxis).contains(&Quirk::WholeAxisOnly);
         let (along, across) = match axis {
             Axis::X => ("sideways", "up and down"),
             _ => ("up and down", "sideways"),
         };
-        if !self.person.ready(&format!(
-            "next anybox locks your mouse {along} for 8 seconds and pushes the cursor {along} itself a few times. \
-             after the beep move your mouse around in every direction"
-        ))? {
+        let text = if one_way {
+            "next anybox locks your mouse one way at a time for 8 seconds, first you can only go left, then only \
+             right, and it pushes the cursor sideways itself a few times. after the beep move your mouse around in \
+             every direction"
+                .to_string()
+        } else {
+            format!(
+                "next anybox locks your mouse {along} for 8 seconds and pushes the cursor {along} itself a few times. \
+                 after the beep move your mouse around in every direction"
+            )
+        };
+        if !self.person.ready(&text)? {
             self.report.check(&name, Outcome::Skipped, "");
             return Ok(());
         }
         let events = self.device.events_of(EventKinds::MOTION);
-        let locked = self.device.lock_axis(axis, Direction::Both);
+        let first = if one_way {
+            Direction::Positive
+        } else {
+            Direction::Both
+        };
+        let mut done = self.device.lock_axis(axis, first);
         self.person.beep();
-        let mut pushed = Ok(());
         for step in 0..4 {
             self.person.wait(Duration::from_secs(2))?;
+            if one_way && step == 2 {
+                done = done
+                    .and(self.device.unlock_axis(axis, Direction::Positive))
+                    .and(self.device.lock_axis(axis, Direction::Negative));
+            }
             let amount = if step % 2 == 0 { 150 } else { -150 };
             let (dx, dy) = if axis == Axis::X {
                 (amount, 0)
             } else {
                 (0, amount)
             };
-            pushed = pushed.and(self.device.move_by(dx, dy));
+            done = done.and(self.device.move_by(dx, dy));
         }
-        let unlocked = self.device.unlock_axis(axis, Direction::Both);
+        let last = if one_way {
+            Direction::Negative
+        } else {
+            Direction::Both
+        };
+        let unlocked = self.device.unlock_axis(axis, last);
         self.person.beep();
-        let seen = tally(&drain(&events));
-        if let Err(error) = locked.and(pushed).and(unlocked) {
+        let seen = drain(&events);
+        if let Err(error) = done.and(unlocked) {
             self.report
                 .check(&name, Outcome::Failed, &error.to_string());
             return Ok(());
         }
-        let blocked = self.person.yes_no(&format!(
-            "could you only move {across}, while anybox still pushed the cursor {along}?"
-        ))?;
+        let question = if one_way {
+            "could you only go left for the first half and only right for the second, while anybox still pushed \
+             the cursor both ways?"
+                .to_string()
+        } else {
+            format!("could you only move {across}, while anybox still pushed the cursor {along}?")
+        };
+        let blocked = self.person.yes_no(&question)?;
+        let name = if one_way {
+            format!("{axis} locked one way at a time")
+        } else {
+            name
+        };
         asked(
             self.report,
             &name,
             blocked,
-            &format!("your motion while locked still came in as: {seen}"),
+            &format!(
+                "your motion while locked still came in as: {}",
+                tally(&seen)
+            ),
         );
         Ok(())
     }
@@ -583,6 +743,10 @@ impl Checks<'_> {
     /// only the trace shows
     fn receivers(&mut self) -> Run<()> {
         let name = "a buttons only receiver next to an everything receiver";
+        if !supported(self.device, Action::ButtonEvents) {
+            self.report.check(name, Outcome::NotAvailable, "");
+            return Ok(());
+        }
         if !self
             .person
             .ready("for 5 seconds after the beep, click and move your mouse")?
@@ -590,21 +754,24 @@ impl Checks<'_> {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
-        let all = self.device.events();
         let buttons = self.device.events_of(EventKinds::BUTTONS);
-        self.person.timed("go", Duration::from_secs(5))?;
-        let only_buttons = drain(&buttons)
-            .iter()
-            .all(|e| matches!(e, Event::Button { .. } | Event::Dropped { .. }));
-        let everything = tally(&drain(&all));
+        let all = self.device.events();
+        let everything = gather(self.person, &all, "go", Duration::from_secs(5))?;
+        let only = drain(&buttons);
+        let input_only_buttons = only.iter().all(|e| {
+            !matches!(
+                e,
+                Event::Motion { .. } | Event::Key { .. } | Event::Media { .. }
+            )
+        });
         self.report.check(
             name,
-            if only_buttons {
-                Outcome::Passed
-            } else {
-                Outcome::Failed
-            },
-            &format!("the everything receiver got: {everything}"),
+            passed_if(input_only_buttons && buttons_in(&only) > 0),
+            &format!(
+                "the buttons receiver got: {}, the everything receiver got: {}",
+                tally(&only),
+                tally(&everything)
+            ),
         );
         drop((all, buttons));
         self.person.wait(Duration::from_secs(1))?;
@@ -682,21 +849,31 @@ impl Checks<'_> {
                 "",
             );
         }
-        let up = self
-            .person
-            .yes_no("click right over the desktop. does it work like normal (not stuck held)?")?;
-        asked(self.report, "right let go after the reconnect", up, "");
+        // a box that keeps held buttons through a reconnect is allowed to, so it's only noted there
+        let keeps = quirks(self.device, Action::Press).contains(&Quirk::KeepsHeld);
+        let up = self.person.yes_no(
+            "is right let go now (a right click over the desktop works like normal, not stuck held)?",
+        )?;
+        if keeps {
+            self.report.check(
+                "right after the reconnect",
+                Outcome::Noted,
+                &format!("the box keeps held buttons, let go: {up:?}"),
+            );
+        } else {
+            asked(self.report, "right let go after the reconnect", up, "");
+        }
+        let _ = self.device.release(Button::Right);
         let after = self.device.events_of(EventKinds::BUTTONS);
-        self.person
-            .timed("click any button a few times", Duration::from_secs(5))?;
-        let seen = drain(&after);
+        let seen = gather(
+            self.person,
+            &after,
+            "click any button a few times",
+            Duration::from_secs(5),
+        )?;
         self.report.check(
-            "events after the reconnect",
-            if seen.is_empty() {
-                Outcome::Failed
-            } else {
-                Outcome::Passed
-            },
+            "button events after the reconnect",
+            passed_if(buttons_in(&seen) > 0),
             &tally(&seen),
         );
         Ok(())
@@ -714,7 +891,7 @@ impl Checks<'_> {
                 .scaled(Duration::from_secs(60))
                 .max(Duration::from_secs(5));
         while Instant::now() < until {
-            self.person.wait(Duration::from_millis(1))?;
+            self.person.stopped()?;
             if let Ok(event) = events.recv_timeout(Duration::from_millis(100)) {
                 if !matches!(event, Event::Motion { .. } | Event::Button { .. }) {
                     log.push(format!("{event:?}"));
@@ -729,16 +906,38 @@ impl Checks<'_> {
     }
 }
 
-/// closes it and says what close couldn't do, because a failed close can leave something held
+/// closes it and says what close couldn't do, because a failed close can leave something held. a middle press
+/// goes in first, so the trace shows close letting go of something held
 pub fn close(device: &Device, person: &Person, report: &mut Report) {
+    let held = device.press(Button::Middle);
     match device.close() {
-        Ok(()) => report.check("close", Outcome::Passed, ""),
+        Ok(()) => report.check(
+            "close while middle is held",
+            Outcome::Passed,
+            &format!("press {held:?}"),
+        ),
         Err(error) => {
-            report.check("close", Outcome::Failed, &error.to_string());
+            report.check(
+                "close while middle is held",
+                Outcome::Failed,
+                &error.to_string(),
+            );
             person.say(&format!(
                 "closing the box didn't fully work ({error}), so if a button or key is still held or locked, \
                  unplug the box and plug it back in"
             ));
         }
     }
+}
+
+/// runs `checks` on a device and always closes it afterwards, a stopped run included
+pub fn closing<T>(
+    device: &Device,
+    person: &Person,
+    report: &mut Report,
+    checks: impl FnOnce(&mut Report) -> Run<T>,
+) -> Run<T> {
+    let ran = checks(report);
+    close(device, person, report);
+    ran
 }

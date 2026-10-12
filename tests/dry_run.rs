@@ -23,9 +23,9 @@ fn a_dry_run_goes_through_and_writes_a_clean_report() {
     assert!(text.contains(", 0 failed,"), "{text}");
     for check in [
         "square of moves: passed",
-        "every kind of input shows up as events: passed",
+        "button events, all five buttons: passed",
         "unplug and replug: passed",
-        "close: passed",
+        "close while middle is held: passed",
     ] {
         assert!(text.contains(check), "{check} missing in\n{text}");
     }

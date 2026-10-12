@@ -1,0 +1,21 @@
+name: release
+
+# the exe on a release is built here from the tagged source, so what you run is exactly what you can read
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" target/release/anybox-testing.exe --title "$GITHUB_REF_NAME" --notes "built by this workflow from $GITHUB_SHA"

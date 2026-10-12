@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anybox::{ClickTiming, Connect, Device, Family, FerrumApi};
 use serialport::SerialPortType;
 
-use checks::{Checks, close};
+use checks::{Checks, closing};
 use person::{Person, Run, STOP};
 use report::{Outcome, Report};
 
@@ -34,7 +34,6 @@ fn main() {
             }
         }
     }
-    let _ = ctrlc::set_handler(|| STOP.store(true, Ordering::Release));
 
     let stamp = report::now() as u64;
     let trace = out.join(format!("anybox-trace-{stamp}.tmp"));
@@ -43,6 +42,13 @@ fn main() {
 
     let person = Person { scripted };
     let mut report = Report::default();
+    if let Err(error) = ctrlc::set_handler(|| STOP.store(true, Ordering::Release)) {
+        // without it Ctrl+C ends the program right away, though dropping the devices still lets go of things
+        report.line(&format!("Ctrl+C handler not installed: {error}"));
+        person.say(
+            "just so you know, Ctrl+C won't stop this cleanly, so let it run to the end if you can",
+        );
+    }
     let ran = if scripted {
         dry_run(&person, &mut report)
     } else {
@@ -96,8 +102,12 @@ fn windows_version() -> String {
 
 /// every serial port with what USB says about it, the serial included, because that's how a YSC tells its ports
 /// apart
-fn ports(report: &mut Report, when: &str) -> Vec<serialport::SerialPortInfo> {
+fn ports(person: &Person, report: &mut Report, when: &str) -> Vec<serialport::SerialPortInfo> {
     report.section(&format!("ports {when}"));
+    person.say(&format!(
+        "
+serial ports {when}:"
+    ));
     let ports = serialport::available_ports().unwrap_or_default();
     if ports.is_empty() {
         report.line("none");
@@ -110,6 +120,7 @@ fn ports(report: &mut Report, when: &str) -> Vec<serialport::SerialPortInfo> {
             ),
             other => format!("{} {other:?}", port.port_name),
         };
+        person.say(&format!("  {line}"));
         report.line(&line);
     }
     ports
@@ -124,7 +135,7 @@ fn is_ysc_left(port: &serialport::SerialPortInfo) -> bool {
 fn setup(person: &Person, report: &mut Report, extra: &[&str]) -> Run<()> {
     let mut questions = vec![
         "which mouse is plugged into the box, and at what polling rate?",
-        "which keyboard is plugged into the box (or none)?",
+        "which keyboard is plugged into the box, and at what polling rate (or none)?",
     ];
     questions.extend_from_slice(extra);
     for question in questions {
@@ -160,9 +171,9 @@ fn on_box(
     what: &str,
     unplug: Option<&dyn Fn()>,
 ) -> Run<()> {
-    let ran = common(&device, person, report, what, unplug);
-    close(&device, person, report);
-    ran
+    closing(&device, person, report, |report| {
+        common(&device, person, report, what, unplug)
+    })
 }
 
 fn run(person: &Person, report: &mut Report) -> Run<()> {
@@ -173,8 +184,11 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
          to clicks first. if anything ever stays held, unplugging the box lets go of it, and Ctrl+C stops the run \
          at any time\n",
     );
-    let found = ports(report, "at the start");
+    let found = ports(person, report, "at the start");
 
+    if !found.iter().any(is_ysc_left) {
+        report.line("no YSC 8K command port (1A86:FE0C with serial TOWMCULEFT) found");
+    }
     for port in found.iter().filter(|p| is_ysc_left(p)) {
         let path = port.port_name.as_str();
         report.section(&format!("YSC 8K on {path}"));
@@ -201,14 +215,16 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
                 if none == Some(true) || !keyboard {
                     ysc::no_keyboard(path, person, report)?;
                 }
+                ports(person, report, &format!("after the YSC on {path}"));
             }
             Err(error) => report.check("open", Outcome::Failed, &error.to_string()),
         }
     }
 
-    let software: Vec<String> = Connect::auto()
-        .family(Family::Ferrum)
-        .find()
+    report.section("Ferrum search");
+    let software = Connect::auto().family(Family::Ferrum).find();
+    report.line(&format!("Ferrum app ports anybox found: {software:?}"));
+    let software: Vec<String> = software
         .unwrap_or_default()
         .into_iter()
         .map(|found| found.port)
@@ -229,8 +245,8 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
     }
     if !ferrums.is_empty() || person.yes_no("\ndo you have a Ferrum plugged in?")? == Some(true) {
         let port = person.answer(
-            "for the Ferrum's own port (the box itself, not the app), type its port from the list at the top of the \
-             report, or press Enter to skip it:",
+            "for the Ferrum's own port (the box itself, not the app), type its port from the serial ports listed \
+             above, or press Enter to skip it:",
             "",
         )?;
         if !port.is_empty() {
@@ -259,14 +275,19 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
             }
         }
         ferrum::press_through_close(&path, person, report)?;
+        ports(person, report, &format!("after the Ferrum on {path}"));
     }
 
-    for found in anybox::find().unwrap_or_default() {
+    let others = anybox::find();
+    if let Err(error) = &others {
+        report.line(&format!("looking for other boxes failed: {error}"));
+    }
+    for found in others.unwrap_or_default() {
         if !matches!(found.info.family, Family::MakcuV4 | Family::Medius) {
             continue;
         }
         let question = format!(
-            "\nalso run the checks on the {} on {}? (optional, it's about 10 minutes)",
+            "\nalso run the checks on the {} on {}? (optional, it's about 5 minutes)",
             found.info.family, found.port
         );
         if person.yes_no(&question)? != Some(true) {
@@ -280,13 +301,13 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
         }
     }
 
-    ports(report, "at the end");
+    ports(person, report, "at the end");
     Ok(())
 }
 
 /// the whole common flow on the medius crate's mock box with a script answering, to prove the tester itself
 fn dry_run(person: &Person, report: &mut Report) -> Run<()> {
-    let found = ports(report, "at the start");
+    let found = ports(person, report, "at the start");
     report.line(&format!(
         "{} ports, none of them used in a dry run",
         found.len()
@@ -310,15 +331,17 @@ fn dry_run(person: &Person, report: &mut Report) -> Run<()> {
             let mut seq = 0u32;
             while !done.load(Ordering::Acquire) {
                 seq += 1;
-                mock.push_motion(seq as u8, seq * 1000, 3, -2, 0, 0);
-                if seq.is_multiple_of(10) {
-                    let left = Usage::new(Class::Button, 0);
+                let wheel = i16::from(seq.is_multiple_of(5));
+                mock.push_motion(seq as u8, seq * 1000, 3, -2, wheel, 0);
+                if seq.is_multiple_of(4) {
+                    // every button in turn, so each one shows up within a short timed part
+                    let button = Usage::new(Class::Button, ((seq / 4) % 5) as u16);
                     mock.push_usages(
                         seq as u8,
                         seq * 1000,
                         Class::Button,
                         Direction::PRESS,
-                        &[left],
+                        &[button],
                     );
                     mock.push_usages(
                         seq as u8,
