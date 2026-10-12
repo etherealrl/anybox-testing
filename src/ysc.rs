@@ -186,6 +186,10 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
 /// anybox refuses to drive a YSC in debug mode. it needs the vendor tool, so it's optional
 pub fn debug_mode(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     let name = "open refused in debug mode";
+    // set first, so skipping or closing after turning it on still shows how to turn it off
+    if let Some(ui) = &person.ui {
+        ui.change(|v| v.restore_debug = true);
+    }
     if !person.confirm("turn debug mode on, then close the ysc tool")? {
         report.check(name, Outcome::Skipped, "");
         return Ok(());

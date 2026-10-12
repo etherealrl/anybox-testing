@@ -67,11 +67,13 @@ pub fn key_down(seen: &[Seen], key: &str) -> bool {
         .any(|s| matches!(&s.input, Input::Key { key: k, pressed: true } if k == key))
 }
 
+/// went down and ended up, a key still held at the end doesn't count
 pub fn key_pair(seen: &[Seen], key: &str) -> bool {
     key_down(seen, key)
-        && seen
-            .iter()
-            .any(|s| matches!(&s.input, Input::Key { key: k, pressed: false } if k == key))
+        && seen.iter().rev().find_map(|s| match &s.input {
+            Input::Key { key: k, pressed } if k == key => Some(*pressed),
+            _ => None,
+        }) == Some(false)
 }
 
 pub fn text(seen: &[Seen]) -> String {
@@ -102,13 +104,23 @@ pub fn buttons(seen: &[Seen]) -> String {
 
 pub fn summary(seen: &[Seen]) -> String {
     let (dx, dy) = moved(seen);
-    let keys: Vec<&str> = seen
+    // anything else typed meanwhile could be private, so it's only counted
+    let asked = ["F13", "F14", "ShiftLeft", "A", "B", "C"];
+    let pressed: Vec<&str> = seen
         .iter()
         .filter_map(|s| match &s.input {
             Input::Key { key, pressed: true } => Some(key.as_str()),
             _ => None,
         })
         .collect();
+    let mut keys: Vec<&str> = pressed
+        .iter()
+        .copied()
+        .filter(|key| asked.contains(key))
+        .collect();
+    let others = pressed.len() - keys.len();
+    let others = format!("{others} other keys");
+    keys.push(&others);
     let units: Vec<&str> = seen
         .iter()
         .filter_map(|s| match &s.input {

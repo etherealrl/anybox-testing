@@ -4,7 +4,9 @@ checks a supported passthrough box through anybox and saves a plain text report,
 
 ## running it
 
-build it with Rust from <https://rustup.rs>:
+grab `anybox-testing.exe` from the latest release and run it. the exe is built by GitHub Actions straight from the code in this repo (`.github/workflows/release.yml`), so what you run is exactly what you can read here
+
+or build it yourself with Rust from <https://rustup.rs>:
 
 ```sh
 cargo run --release

@@ -20,7 +20,7 @@ fn key_pair(events: &[Event], key: Key) -> bool {
     })
 }
 fn window_pair(seen: &[Seen], button: Button) -> bool {
-    pad::presses(seen, button) > 0 && pad::releases(seen, button) > 0
+    pad::presses(seen, button) > 0 && pad::ends_down(seen, button) == Some(false)
 }
 
 impl Checks<'_> {

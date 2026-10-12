@@ -18,7 +18,12 @@ impl Checks<'_> {
             "hands off, don't touch anything",
             Duration::from_millis(500),
         );
-        let held = self.device.press(Button::Right);
+        // with no pc mouse the cursor can't be kept in the test area, so the click could land anywhere
+        let held = if self.person.can_position() {
+            self.device.press(Button::Right)
+        } else {
+            Err(anybox::Error::Closed)
+        };
         let mut log = Vec::new();
         collect(self.person, &events, Duration::from_millis(500), &mut log)?;
         let known_down = held.is_ok()
@@ -130,7 +135,7 @@ impl Checks<'_> {
             self.device.release(Button::Right),
             "",
         );
-        if state == Some(true) {
+        if state == Some(true) && self.person.can_position() {
             self.person.pad_clear();
             let cleared = self.acquire(&events, "click right once to clear it", |_, window| {
                 pad::releases(window, Button::Right) > 0

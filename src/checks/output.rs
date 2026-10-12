@@ -141,7 +141,7 @@ impl Checks<'_> {
             self.window(
                 &format!("press and release {button:?} reached the PC"),
                 pressed.and(released),
-                |w| pad::presses(w, button) > 0 && pad::releases(w, button) > 0,
+                |w| pad::presses(w, button) > 0 && pad::ends_down(w, button) == Some(false),
             );
             if self.report.failed() > before {
                 return Ok(());

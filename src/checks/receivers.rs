@@ -71,7 +71,7 @@ impl Checks<'_> {
             passed_if(filtered && delivered),
             &format!("buttons {}, all {}", tally(&only), tally(&everything)),
         );
-        if keyboard {
+        if keyboard && self.person.can_position() {
             let call = self.device.click(Button::Middle);
             self.report.check(
                 "injected middle receiver observation",

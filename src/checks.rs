@@ -248,6 +248,16 @@ impl Checks<'_> {
     }
 
     fn release_inputs(&mut self) {
+        let failed = self.report.failed();
+        self.release_all();
+        if self.report.failed() > failed
+            && let Some(ui) = &self.person.ui
+        {
+            ui.change(|v| v.cleanup_failed = true);
+        }
+    }
+
+    fn release_all(&mut self) {
         if supported(self.device, Action::Release) {
             for button in BUTTONS {
                 result(
