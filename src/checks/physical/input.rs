@@ -153,9 +153,9 @@ impl Checks<'_> {
                 self.person,
                 &events,
                 if positive {
-                    "scroll up now"
+                    "scroll up a few times now"
                 } else {
-                    "scroll down now"
+                    "scroll down a few times now"
                 },
                 Duration::from_secs(5),
             )?;

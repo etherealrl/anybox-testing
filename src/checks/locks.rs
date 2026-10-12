@@ -26,7 +26,7 @@ impl Checks<'_> {
         let mut done = self.device.lock_axis(axis, first);
         self.person.action(
             if one_way {
-                "move your mouse now, only left should work"
+                "move your mouse in tiny circles now, only left should work"
             } else {
                 "move your mouse in every direction now"
             },
@@ -39,7 +39,7 @@ impl Checks<'_> {
                     .and(self.device.unlock_axis(axis, Direction::Positive))
                     .and(self.device.lock_axis(axis, Direction::Negative));
                 self.person
-                    .cue("move your mouse now, only right should work");
+                    .cue("move your mouse in tiny circles now, only right should work");
             }
             collect(self.person, &events, Duration::from_secs(2), &mut seen)?;
             let amount = if step % 2 == 0 { 150 } else { -150 };
@@ -64,7 +64,7 @@ impl Checks<'_> {
             return Ok(());
         }
         let question = if one_way {
-            "could you only go left for the first half and only right for the second, while anybox still pushed \
+            "could you only go left for the first half and only right for the second half, while anybox still pushed \
              the cursor both ways?"
                 .to_string()
         } else {

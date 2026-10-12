@@ -174,15 +174,27 @@ impl eframe::App for App {
             });
         };
         egui::Panel::top("alert")
-            .exact_size(120.0)
+            .exact_size(140.0)
             .show(root, |ui| {
                 ui.label(RichText::new(&view.section).size(16.0));
-                ui.label(
-                    RichText::new(&view.text)
-                        .size(28.0)
-                        .strong()
-                        .color(Color32::from_rgb(110, 210, 160)),
-                );
+                // a card only says what the next test is about, green is kept for what to do right now
+                if view.phase == Phase::Card {
+                    ui.label(
+                        RichText::new(
+                            "next test, don't do anything yet, it tells you what to do after start",
+                        )
+                        .size(16.0)
+                        .weak(),
+                    );
+                    ui.label(RichText::new(&view.text).size(26.0).strong());
+                } else {
+                    ui.label(
+                        RichText::new(&view.text)
+                            .size(28.0)
+                            .strong()
+                            .color(Color32::from_rgb(110, 210, 160)),
+                    );
+                }
                 if let Some((start, end)) = view.timer {
                     let total = (end - start).as_secs_f32().max(0.001);
                     ui.add(
