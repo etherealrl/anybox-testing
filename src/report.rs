@@ -46,6 +46,16 @@ pub fn now() -> f64 {
 }
 
 impl Report {
+    pub fn counts(&self) -> [usize; 5] {
+        self.counts
+    }
+
+    pub fn position(&self) -> usize {
+        self.body.len()
+    }
+    pub fn since(&self, position: usize) -> &str {
+        &self.body[position..]
+    }
     pub fn section(&mut self, title: &str) {
         let _ = write!(self.body, "\n## {title}\n\n");
     }

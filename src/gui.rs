@@ -1,26 +1,27 @@
+mod controls;
+mod setup;
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anybox::Button;
-use eframe::egui::{
-    self, Align, Color32, Event, Layout, MouseWheelUnit, PointerButton, Pos2, RichText, Sense,
-    Stroke, Vec2,
-};
-
 use crate::pad::{Input, Seen};
-use crate::person::{Answer, Mode, STOP, Ui};
+use crate::person::{Answer, Phase, Reply, STOP, Ui};
+use anybox::Button;
+use eframe::egui::{self, Color32, Event, PointerButton, Pos2, RichText, Sense, Stroke};
 
 pub struct App {
     ui: Arc<Ui>,
     worker: Option<JoinHandle<()>>,
     trail: VecDeque<Pos2>,
     typed: String,
-    recent: VecDeque<String>,
-    /// the step on screen, to tell when a new one starts
-    shown: String,
+    sink: String,
+    shown: u64,
+    setup: crate::setup::Setup,
+    exiting: bool,
+    area: Option<egui::Rect>,
 }
 
 impl App {
@@ -30,16 +31,40 @@ impl App {
             worker: Some(worker),
             trail: VecDeque::new(),
             typed: String::new(),
-            recent: VecDeque::new(),
-            shown: String::new(),
+            sink: String::new(),
+            shown: 0,
+            setup: crate::setup::Setup::default(),
+            exiting: false,
+            area: None,
         }
     }
-
-    /// everything Windows delivered this frame goes to the checks, whatever the window is showing
     fn record(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
-        let events = ctx.input(|i| i.raw.events.clone());
+        let (events, focused, released, position, shift) = ctx.input(|i| {
+            (
+                i.raw.events.clone(),
+                i.focused,
+                !i.pointer.any_down() && i.keys_down.is_empty() && i.modifiers.is_none(),
+                i.pointer.hover_pos(),
+                i.modifiers.shift,
+            )
+        });
+        self.ui.change(|v| {
+            v.focused = focused;
+            v.released = released;
+            v.in_area = self
+                .area
+                .is_some_and(|r| position.is_some_and(|p| r.contains(p)));
+        });
+        let phase = self.ui.view.lock().unwrap().phase;
+        if !matches!(phase, Phase::Active | Phase::Release | Phase::CleaningUp) {
+            return;
+        }
         let mut pad = self.ui.pad.lock().unwrap();
+        pad.push(Seen {
+            at: now,
+            input: Input::Shift(shift),
+        });
         for event in events {
             let input = match event {
                 Event::PointerButton {
@@ -54,23 +79,36 @@ impl App {
                     },
                     pressed,
                 },
-                Event::MouseWheel { unit, delta, .. } => Input::Wheel(match unit {
-                    MouseWheelUnit::Point => delta.y / 50.0,
-                    _ => delta.y,
-                }),
+                Event::MouseWheel { unit, delta, .. } => {
+                    pad.push(Seen {
+                        at: now,
+                        input: Input::WheelDetail(format!("{unit:?} {} {}", delta.x, delta.y)),
+                    });
+                    Input::Wheel(delta.y)
+                }
                 Event::MouseMoved(delta) => Input::Moved(delta.x, delta.y),
-                Event::Key { key, pressed, .. } => Input::Key {
+                Event::Key {
+                    key,
+                    pressed,
+                    repeat: false,
+                    ..
+                } => Input::Key {
                     key: format!("{key:?}"),
                     pressed,
                 },
-                Event::Text(text) => Input::Text(text),
+                Event::Text(text) => {
+                    if self.sink.len() < 32 {
+                        self.sink
+                            .extend(text.chars().filter(|c| "abcABC".contains(*c)).take(3));
+                    }
+                    Input::Text(text)
+                }
+                Event::Paste(_) => Input::Paste,
                 _ => continue,
             };
-            if !matches!(input, Input::Moved(..)) {
-                self.recent.push_front(format!("{input:?}"));
-                self.recent.truncate(8);
+            if pad.len() < 20000 {
+                pad.push(Seen { at: now, input });
             }
-            pad.push(Seen { at: now, input });
         }
     }
 }
@@ -78,158 +116,129 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
-        self.record(&ctx);
-        // a countdown and the trail need frames even when nothing happens
-        ctx.request_repaint_after(Duration::from_millis(30));
-        let view = self.ui.view.lock().unwrap();
-        let fresh = view.text != self.shown;
-        if fresh {
-            self.shown = view.text.clone();
-            self.trail.clear();
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.exiting = true;
+            let current = self.ui.view.lock().unwrap().clone();
+            if current.phase == Phase::Save {
+                self.send(&current, Answer::Skip);
+            }
+            if self.ui.view.lock().unwrap().done.is_none() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                STOP.store(true, Ordering::Release);
+                self.ui.change(|v| {
+                    v.phase = Phase::CleaningUp;
+                    v.text = "letting go and saving the report".into();
+                });
+            }
         }
-        let answer = |a: Answer| {
-            let _ = self.ui.answer.send(a);
+        self.record(&ctx);
+        ctx.request_repaint_after(Duration::from_millis(30));
+        let view = self.ui.view.lock().unwrap().clone();
+        if self.exiting && view.done.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if self.shown != view.step {
+            self.shown = view.step;
+            self.typed.clear();
+            self.sink.clear();
+            if !matches!(view.phase, Phase::Setup | Phase::Text | Phase::Save) {
+                ctx.memory_mut(|m| {
+                    if let Some(id) = m.focused() {
+                        m.surrender_focus(id);
+                    }
+                });
+            }
+        }
+        let sender = self.ui.answer.clone();
+        let answer = |a| {
+            let _ = sender.send(Reply {
+                step: view.step,
+                answer: a,
+            });
         };
-
-        egui::Panel::top("section").show(root, |ui| {
-            ui.add_space(6.0);
-            ui.heading(RichText::new(&view.section).size(22.0).strong());
-            ui.add_space(6.0);
-        });
-
-        egui::Panel::left("step")
-            .exact_size(460.0)
+        egui::Panel::top("alert")
+            .exact_size(120.0)
             .show(root, |ui| {
-                ui.add_space(10.0);
-                if let Some(path) = &view.done {
-                    ui.label(RichText::new("all done").size(22.0).strong());
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "the report is {path}. it's plain text, so you can read it before you send it"
-                        ))
-                        .size(16.0),
-                    );
-                    ui.add_space(8.0);
-                    if ui.button(RichText::new("show it in its folder").size(16.0)).clicked() {
-                        let _ = std::process::Command::new("explorer")
-                            .arg(format!("/select,{path}"))
-                            .spawn();
-                    }
-                    return;
-                }
-                ui.label(RichText::new(&view.text).size(17.0));
-                if !view.hint.is_empty() {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(&view.hint).size(14.0).weak());
-                }
-                ui.add_space(12.0);
-                let big = |text: &str| egui::Button::new(RichText::new(text).size(18.0)).min_size(Vec2::new(120.0, 36.0));
-                match view.mode {
-                    Mode::Ready => {
-                        ui.horizontal(|ui| {
-                            if ui.add(big("Start")).clicked() {
-                                answer(Answer::Start);
-                            }
-                            if ui.add(big("Skip")).clicked() {
-                                answer(Answer::Skip);
-                            }
-                        });
-                    }
-                    Mode::YesNo => {
-                        ui.horizontal(|ui| {
-                            if ui.add(big("Yes")).clicked() {
-                                answer(Answer::Yes);
-                            }
-                            if ui.add(big("No")).clicked() {
-                                answer(Answer::No);
-                            }
-                            if ui.add(big("Skip")).clicked() {
-                                answer(Answer::Skip);
-                            }
-                        });
-                    }
-                    Mode::Text => {
-                        let field = ui.add(
-                            egui::TextEdit::singleline(&mut self.typed)
-                                .font(egui::TextStyle::Heading)
-                                .desired_width(400.0),
-                        );
-                        if fresh {
-                            field.request_focus();
-                        }
-                        let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.add(big("OK")).clicked() || entered {
-                            answer(Answer::Text(std::mem::take(&mut self.typed)));
-                        }
-                    }
-                    Mode::Busy => {
-                        ui.label(RichText::new("anybox is working, hang on").size(15.0).weak());
-                    }
-                }
-                if let Some((start, end)) = view.now {
-                    ui.add_space(16.0);
-                    ui.label(RichText::new("NOW").size(40.0).strong().color(Color32::from_rgb(80, 200, 120)));
-                    let total = (end - start).as_secs_f32().max(0.001);
-                    let done = start.elapsed().as_secs_f32().min(total);
-                    ui.add(
-                        egui::ProgressBar::new(done / total)
-                            .text(format!("{:.0} s left", (total - done).max(0.0)))
-                            .desired_height(24.0),
-                    );
-                }
-                ui.add_space(12.0);
-                for line in &view.status {
-                    ui.label(RichText::new(line).size(15.0));
-                }
-            });
-
-        egui::CentralPanel::default_margins().show(root, |ui| {
-            ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                ui.label(RichText::new(&view.section).size(16.0));
                 ui.label(
-                    RichText::new("test area, keep your cursor in here")
-                        .size(16.0)
-                        .weak(),
+                    RichText::new(&view.text)
+                        .size(28.0)
+                        .strong()
+                        .color(Color32::from_rgb(110, 210, 160)),
                 );
-            });
-            let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click());
-            let painter = ui.painter_at(rect);
-            painter.rect_stroke(
-                rect,
-                8.0,
-                Stroke::new(1.0, Color32::GRAY),
-                egui::StrokeKind::Inside,
-            );
-            if let Some(pos) = response.hover_pos() {
-                self.trail.push_back(pos);
-                if self.trail.len() > 300 {
-                    self.trail.pop_front();
+                if let Some((start, end)) = view.timer {
+                    let total = (end - start).as_secs_f32().max(0.001);
+                    ui.add(
+                        egui::ProgressBar::new((start.elapsed().as_secs_f32() / total).min(1.0))
+                            .desired_height(18.0),
+                    );
                 }
+            });
+        if !matches!(
+            view.phase,
+            Phase::Setup | Phase::Finished | Phase::Connecting
+        ) {
+            egui::Panel::left("tests")
+                .exact_size(220.0)
+                .show(root, |ui| {
+                    ui.label(format!(
+                        "test {} of {}",
+                        view.cards
+                            .iter()
+                            .filter(|c| c.result != "waiting")
+                            .count()
+                            .min(view.cards.len()),
+                        view.cards.len()
+                    ));
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for card in &view.cards {
+                            ui.label(&card.title);
+                            ui.small(&card.result);
+                            ui.add_space(6.0);
+                        }
+                    });
+                });
+        }
+        egui::CentralPanel::default_margins().show(root, |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 230.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                self.controls(ui, &view);
+                ui.label(&view.hint);
+                if view.side_choice && view.phase == Phase::Active && ui.button("this mouse doesn't have it").clicked() { answer(Answer::No); }
+                if view.done.is_none() && !matches!(view.phase, Phase::Setup | Phase::Finished) && ui.button("stop run").clicked() {
+                    STOP.store(true, Ordering::Release);
+                    self.ui.change(|v| { v.phase = Phase::CleaningUp; v.text = "letting go and saving the report".into(); });
+                }
+                if view.cleanup_failed { ui.label("if anything is still held or locked, unplug the box and plug it back in"); }
+                if view.restore_debug { ui.label("turn debug mode off, then close the ysc tool before you leave"); }
+                if !matches!(view.phase, Phase::Setup | Phase::Active | Phase::Countdown | Phase::Release | Phase::CleaningUp) {
+                    ui.collapsing("details", |ui| { egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| { for line in &view.status { ui.label(line); } }); });
+                }
+            });
+            // the test area means nothing before a box is connected or after the run
+            if matches!(view.phase, Phase::Setup | Phase::Connecting | Phase::Finished) {
+                return;
             }
-            let points: Vec<Pos2> = self.trail.iter().copied().collect();
-            painter.add(egui::Shape::line(
-                points,
-                Stroke::new(2.0, Color32::from_rgb(90, 160, 255)),
-            ));
-            let mut y = rect.top() + 12.0;
-            for line in &self.recent {
-                painter.text(
-                    Pos2::new(rect.left() + 12.0, y),
-                    egui::Align2::LEFT_TOP,
-                    line,
-                    egui::FontId::monospace(13.0),
-                    Color32::GRAY,
-                );
-                y += 18.0;
-            }
+            ui.label(if view.keyboard { "type here" } else { "test area" });
+            let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+            self.area = Some(rect);
+            let painter = ui.painter_at(rect);
+            painter.rect_stroke(rect, 8.0, Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
+            if let Some(pos) = response.hover_pos() { self.trail.push_back(pos); if self.trail.len() > 300 { self.trail.pop_front(); } }
+            painter.add(egui::Shape::line(self.trail.iter().copied().collect(), Stroke::new(2.0, Color32::from_rgb(90,160,255))));
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, if view.keyboard { &self.sink } else { "put your cursor here" }, egui::FontId::proportional(20.0), Color32::GRAY);
         });
     }
-
     fn on_exit(&mut self) {
-        // closing the window stops the run, and the checks close every box before the worker ends
         STOP.store(true, Ordering::Release);
+        let view = self.ui.view.lock().unwrap().clone();
+        if view.phase == Phase::Save {
+            self.send(&view, Answer::Skip);
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

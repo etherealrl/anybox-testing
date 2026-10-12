@@ -26,6 +26,10 @@ fn a_dry_run_goes_through_and_writes_a_clean_report() {
         "button events, all five buttons: passed",
         "unplug and replug: passed",
         "close: passed",
+        "left held by you while anybox releases it: noted",
+        "repeated middle presses finish released: noted",
+        "key merging: not available, a mouse is attached",
+        "close released held middle: noted, no window in a dry run",
     ] {
         assert!(text.contains(check), "{check} missing in\n{text}");
     }

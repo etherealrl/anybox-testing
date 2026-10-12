@@ -1,25 +1,31 @@
 # anybox-testing
 
-checks how anybox does on your Ferrum and YSC 8K V2 and writes everything into one report you send back. it's a small console program, it tells you what to do at each step and takes about 3 to 5 minutes per box
+checks a supported passthrough box through anybox and saves a plain text report, with a window that tells you what to do one step at a time
 
 ## running it
 
-grab `anybox-testing.exe` from the latest release and run it. the exe is built by GitHub Actions straight from the code in this repo (see `.github/workflows/release.yml`), so you can read exactly what it does before you run it
-
-or build it yourself, you need Rust from <https://rustup.rs>:
+build it with Rust from <https://rustup.rs>:
 
 ```sh
 cargo run --release
 ```
 
-## what it does to your PC
+choose the box, the one mouse or keyboard plugged into it, and its rate if you know it. close games and keep the window in front, because the tests send clicks and keys
 
-it moves your cursor a little (a small square that ends where it started), clicks right, middle and the side buttons, presses and lets go of left only while you're holding it yourself, and holds F13, F14 and shift. it never types anything and never touches the box's settings, firmware or anything else stored on it
+the tests cover output, physical input, locks, event receivers, reconnect, and close. the ysc and ferrum diagnostics are optional, and the window tells you when to unplug the box's cable to this pc
 
-close games and anything that reacts to clicks first. if something ever stays held or locked, unplugging the box lets go of it, and Ctrl+C stops the run at any time
-
-you'll unplug each box once, at the end of its part
+if anything stays held or locked, unplug the box and plug it back in. stop run or closing the window lets the worker close the connection and save first
 
 ## the report
 
-it's a plain text file next to the exe, named `anybox-report-` and a number. read it before you send it if you want, it has the ports on your PC with their USB ids, what each box said, how each check went, and every byte anybox sent to the boxes and got back. there's no user name, PC name or file path from your PC in it
+the report goes next to the exe by default, or into the folder you pass with `--out`. it includes the checks, port details, and full serial trace, so read it before you share it because the trace can include unrelated typing
+
+a recorded result is an observation, it doesn't establish that the box passed a hardware check. missing capabilities and physical controls stay in the report as not available
+
+## dry run
+
+```sh
+cargo run -- --dry-run --out reports
+```
+
+this uses a mock Medius and scripted mouse input, without opening a window or driving a real box. checks that need the window are recorded as `no window in a dry run`

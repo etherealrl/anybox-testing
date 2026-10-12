@@ -1,22 +1,15 @@
 use std::time::{Duration, Instant};
 
 use anybox::Button;
-
-/// what Windows delivered to the tester's window, so a check sees whether anybox's output actually reached the PC
 #[derive(Clone, Debug)]
 pub enum Input {
-    Button {
-        button: Button,
-        pressed: bool,
-    },
-    /// positive is up, like anybox's wheel
+    Button { button: Button, pressed: bool },
     Wheel(f32),
-    /// raw mouse counts, before Windows' acceleration and the screen edges
     Moved(f32, f32),
-    Key {
-        key: String,
-        pressed: bool,
-    },
+    Shift(bool),
+    WheelDetail(String),
+    Paste,
+    Key { key: String, pressed: bool },
     Text(String),
 }
 
@@ -37,16 +30,12 @@ pub fn releases(seen: &[Seen], button: Button) -> usize {
         .filter(|s| matches!(s.input, Input::Button { button: b, pressed: false } if b == button))
         .count()
 }
-
-/// whether the button was down at the end, going by the last press or release seen
 pub fn ends_down(seen: &[Seen], button: Button) -> Option<bool> {
     seen.iter().rev().find_map(|s| match s.input {
         Input::Button { button: b, pressed } if b == button => Some(pressed),
         _ => None,
     })
 }
-
-/// how long the first press of the button was held
 pub fn first_hold(seen: &[Seen], button: Button) -> Option<Duration> {
     let down = seen.iter().position(
         |s| matches!(s.input, Input::Button { button: b, pressed: true } if b == button),
@@ -78,6 +67,13 @@ pub fn key_down(seen: &[Seen], key: &str) -> bool {
         .any(|s| matches!(&s.input, Input::Key { key: k, pressed: true } if k == key))
 }
 
+pub fn key_pair(seen: &[Seen], key: &str) -> bool {
+    key_down(seen, key)
+        && seen
+            .iter()
+            .any(|s| matches!(&s.input, Input::Key { key: k, pressed: false } if k == key))
+}
+
 pub fn text(seen: &[Seen]) -> String {
     seen.iter()
         .filter_map(|s| match &s.input {
@@ -86,8 +82,6 @@ pub fn text(seen: &[Seen]) -> String {
         })
         .collect()
 }
-
-/// the buttons in order, like "Left down, Left up", short enough for one report line
 pub fn buttons(seen: &[Seen]) -> String {
     let order: Vec<String> = seen
         .iter()
@@ -115,11 +109,18 @@ pub fn summary(seen: &[Seen]) -> String {
             _ => None,
         })
         .collect();
+    let units: Vec<&str> = seen
+        .iter()
+        .filter_map(|s| match &s.input {
+            Input::WheelDetail(detail) => Some(detail.as_str()),
+            _ => None,
+        })
+        .collect();
     format!(
-        "the window saw: {}, moved {dx:.0} {dy:.0}, wheel {:.0}, keys {keys:?}, text {:?}",
+        "the window saw: {}, moved {dx:.0} {dy:.0}, wheel {:.0}, units {units:?}, keys {keys:?}, text count {}",
         buttons(seen),
         wheel(seen),
-        text(seen)
+        text(seen).chars().count()
     )
 }
 

@@ -4,8 +4,6 @@ use std::time::Duration;
 use crate::person::{Person, Run};
 use crate::report::{Outcome, Report};
 
-/// one command on the bare port, opened fresh each time the way an app that crashed and restarted would. what
-/// came back, or why nothing did
 fn ask(port: &str, bytes: &[u8]) -> Result<String, String> {
     let mut port = serialport::new(port, 115_200)
         .timeout(Duration::from_millis(300))
@@ -25,27 +23,38 @@ fn ask(port: &str, bytes: &[u8]) -> Result<String, String> {
 /// everything first. nothing in between can stop the run, so the release always goes out
 pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     let name = "a press survives the port closing";
-    if !person.ready(
-        "anybox presses left on the bare port, closes and reopens it and reads left back, then lets go. keep \
-         your cursor in the test area on the right",
-    )? {
+    if !person.ready("we'll hold left across a port reopen, then let go")? {
         report.check(name, Outcome::Skipped, "");
         return Ok(());
     }
     person.pad_clear();
+    person.action("don't touch anything", Duration::from_secs(2));
     let before = ask(port, b"km.left()\r\n");
     let press = ask(port, b"km.left(1)\r\n");
     let after = ask(port, b"km.left()\r\n");
     let mut release = ask(port, b"km.left(0)\r\n");
     if release.is_err() {
+        if let Some(ui) = &person.ui {
+            ui.change(|v| v.cleanup_failed = true);
+        }
         std::thread::sleep(Duration::from_millis(500));
         release = ask(port, b"km.left(0)\r\n");
     }
     std::thread::sleep(Duration::from_millis(300));
-    let window = person
-        .seen()
-        .map(|seen| crate::pad::buttons(&seen))
+    let seen = person.seen();
+    let window = seen
+        .as_ref()
+        .map(|seen| crate::pad::buttons(seen))
         .unwrap_or_default();
+    if seen
+        .as_ref()
+        .is_some_and(|seen| crate::pad::releases(seen, anybox::Button::Left) == 0)
+    {
+        if let Some(ui) = &person.ui {
+            ui.change(|v| v.cleanup_failed = true);
+        }
+        person.say("left's release wasn't confirmed, if anything stays held, unplug the box");
+    }
     let detail = format!(
         "before {before:?}, press {press:?}, after reopening {after:?}, release {release:?}, the window saw {window}"
     );
@@ -57,5 +66,6 @@ pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> 
     } else {
         report.check(name, Outcome::Noted, &detail);
     }
+    person.stop();
     Ok(())
 }

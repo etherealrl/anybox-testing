@@ -1,0 +1,108 @@
+mod buttons;
+mod holds;
+mod input;
+mod keyboard;
+
+use super::*;
+use crate::person::{Answer, Phase};
+
+fn button_pair(events: &[Event], button: Button) -> bool {
+    presses_of(events, button) > 0
+        && events
+            .iter()
+            .any(|e| matches!(e, Event::Button { button: b, pressed: false, .. } if *b == button))
+}
+fn key_pair(events: &[Event], key: Key) -> bool {
+    [true, false].into_iter().all(|down| {
+        events.iter().any(
+            |e| matches!(e, Event::Key { key: k, pressed, .. } if *k == key && *pressed == down),
+        )
+    })
+}
+fn window_pair(seen: &[Seen], button: Button) -> bool {
+    pad::presses(seen, button) > 0 && pad::releases(seen, button) > 0
+}
+
+impl Checks<'_> {
+    pub fn with_them(&mut self) -> Run<()> {
+        if self.person.keyboard() {
+            for name in [
+                "physical buttons",
+                "physical movement",
+                "physical wheel",
+                "fast motion",
+                "physical holds",
+                "injection in events",
+                "button locks",
+                "axis locks",
+            ] {
+                self.report
+                    .check(name, Outcome::NotAvailable, "a keyboard is attached");
+            }
+            self.card("physical keys", Self::physical_keys)?;
+            self.card("key merging", Self::key_merge)?;
+        } else {
+            self.card("physical buttons", Self::physical_buttons)?;
+            self.card("physical movement", Self::physical_motion)?;
+            self.card("physical wheel", Self::physical_wheel)?;
+            self.card("fast movement", Self::fast_motion)?;
+            self.card("held button, press and release", |s| {
+                s.forced_release(false)
+            })?;
+            self.card("held button, release only", |s| s.forced_release(true))?;
+            self.card("injection in events", Self::own_output_in_events)?;
+            self.card("button locks", Self::button_locks)?;
+            for axis in [Axis::X, Axis::Y] {
+                self.card(&format!("{axis} lock").to_lowercase(), |s| {
+                    s.axis_lock(axis)
+                })?;
+            }
+            self.report
+                .check("key merging", Outcome::NotAvailable, "a mouse is attached");
+        }
+        self.card("receiver filtering", Self::receivers)
+    }
+
+    pub(super) fn acquire(
+        &self,
+        events: &Events,
+        prompt: &str,
+        predicate: impl Fn(&[Event], &[Seen]) -> bool,
+    ) -> Run<Option<Vec<Event>>> {
+        self.person.pad_clear();
+        drain(events);
+        self.person.action(prompt, Duration::from_secs(10));
+        if prompt.starts_with("hold ")
+            && let Some(ui) = &self.person.ui
+        {
+            ui.change(|v| v.timer = None);
+        }
+        let until = Instant::now() + self.person.scaled(Duration::from_secs(10));
+        let mut log = Vec::new();
+        while Instant::now() < until {
+            self.person.stopped()?;
+            if let Some(ui) = &self.person.ui
+                && matches!(ui.poll(), Some(Answer::No))
+            {
+                return Ok(None);
+            }
+            collect(self.person, events, Duration::from_millis(50), &mut log)?;
+            if predicate(&log, &self.person.seen().unwrap_or_default()) {
+                return Ok(Some(log));
+            }
+        }
+        self.person.cue("we didn't see that, try again or skip");
+        Ok(Some(log))
+    }
+}
+
+pub(super) fn button_name(button: Button) -> &'static str {
+    match button {
+        Button::Left => "left",
+        Button::Right => "right",
+        Button::Middle => "middle",
+        Button::Side1 => "side 1",
+        Button::Side2 => "side 2",
+        _ => "button",
+    }
+}

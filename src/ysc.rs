@@ -3,7 +3,7 @@ use std::time::Duration;
 use anybox::{Action, Connect, Device, Event, Family};
 
 use crate::checks::{F13, F14, close, closing, drain, tally};
-use crate::person::{Person, Run};
+use crate::person::{Person, Phase, Run};
 use crate::report::{Outcome, Report};
 
 pub fn open(port: &str) -> anybox::Result<Device> {
@@ -33,9 +33,11 @@ fn refused_presses(events: &[Event]) -> u64 {
 /// with no keyboard behind it the box answers a key with a 404. anybox only blames a refusal on a press when
 /// presses were the only key action sent, so each case needs its own fresh open
 pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> {
-    person.say(
-        "next a few quick opens of the YSC to see what it says to keys without a keyboard, nothing to do",
-    );
+    if !person.ready("we'll check how the box refuses keys without a keyboard")? {
+        report.check("no keyboard diagnostic", Outcome::Skipped, "");
+        return Ok(());
+    }
+    person.action("don't touch anything", Duration::from_secs(1));
 
     let name = "no keyboard, presses only";
     match open(port) {
@@ -61,6 +63,7 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
     }
 
     let name = "no keyboard, a press and a release";
+    person.action("don't touch anything", Duration::from_secs(1));
     let second = match open(port) {
         Ok(device) => device,
         Err(error) => {
@@ -86,15 +89,37 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
             // shows which way it went
             Outcome::Noted
         } else {
-            Outcome::Passed
+            Outcome::Noted
         };
         report.check(name, outcome, &detail);
 
-        let plugged = person.yes_no(
-            "if you have a keyboard, plug it into the YSC now and answer y once it's in, otherwise n",
-        )?;
+        let plugged = if person.keyboard() {
+            Some(true)
+        } else {
+            person.yes_no("replace the mouse with a keyboard in the box, if you have one")?
+        };
         if plugged == Some(true) {
+            if !person.confirm(if person.keyboard() {
+                "plug the keyboard back into the box now"
+            } else {
+                "unplug the mouse, then plug the keyboard into the box"
+            })? {
+                return Ok(false);
+            }
+            report.line("attached device changed to keyboard for this diagnostic");
+            if let Some(ui) = &person.ui {
+                ui.change(|v| {
+                    v.keyboard = true;
+                    v.require_area = false;
+                    v.phase = Phase::Active;
+                });
+            }
+            person.action("don't touch anything", Duration::from_secs(2));
             person.wait(Duration::from_secs(2))?;
+            report.line(&format!(
+                "events during the swap {}",
+                tally(&drain(&events))
+            ));
             report.check(
                 "keys stay off on the open that saw the 404",
                 if keys(&second) {
@@ -121,6 +146,8 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
     match open(port) {
         Err(error) => report.check(name, Outcome::Failed, &error.to_string()),
         Ok(third) => closing(&third, person, report, |report| {
+            person.pad_clear();
+            person.action("don't touch anything", Duration::from_secs(1));
             let events = third.events();
             let tapped = third.tap_key(F14);
             person.wait(Duration::from_secs(1))?;
@@ -132,6 +159,22 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
                 if ok { Outcome::Passed } else { Outcome::Failed },
                 &format!("F14 tap {tapped:?}, events: {}", tally(&seen)),
             );
+            match person.seen() {
+                Some(seen) => report.check(
+                    "F14 after keyboard return reached the PC",
+                    if crate::pad::key_pair(&seen, "F14") {
+                        Outcome::Passed
+                    } else {
+                        Outcome::Failed
+                    },
+                    &crate::pad::summary(&seen),
+                ),
+                None => report.check(
+                    "F14 after keyboard return reached the PC",
+                    Outcome::Noted,
+                    "no window in a dry run",
+                ),
+            }
             Ok(())
         })?,
     }
@@ -141,26 +184,48 @@ pub fn no_keyboard(port: &str, person: &Person, report: &mut Report) -> Run<()> 
 /// anybox refuses to drive a YSC in debug mode. it needs the vendor tool, so it's optional
 pub fn debug_mode(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     let name = "open refused in debug mode";
-    let want = person.yes_no(
-        "optional: want to check what happens in debug mode? you need the YSC tool to turn it on and off again",
-    )?;
-    if want != Some(true) {
+    if !person.confirm("turn debug mode on, then close the ysc tool")? {
         report.check(name, Outcome::Skipped, "");
         return Ok(());
     }
-    if !person
-        .ready("turn debug mode on in the YSC tool, then CLOSE the tool so the port is free")?
-    {
-        report.check(name, Outcome::Skipped, "");
-        return Ok(());
+    if let Some(ui) = &person.ui {
+        ui.change(|v| {
+            v.restore_debug = true;
+            v.hint = "turn debug mode off, then close the ysc tool before you leave".into();
+            v.require_area = false;
+        });
     }
     match open(port) {
         Ok(device) => {
             report.check(name, Outcome::Failed, "it opened");
             close(&device, person, report);
         }
-        Err(error) => report.check(name, Outcome::Noted, &error.to_string()),
+        Err(error) => report.check(name, if matches!(&error, anybox::Error::Rejected { action: Action::Connect, detail, .. } if detail == "the YSC box is in debug mode, leave debug mode in the vendor tool and connect again") { Outcome::Passed } else { Outcome::Noted }, &format!("{error}, cmd 702 and absence of setters remain in the trace")),
     }
-    person.ready("now turn debug mode off again in the YSC tool and close the tool")?;
+    if !person.confirm("turn debug mode off, then close the ysc tool")? {
+        report.check(
+            "debug mode restoration",
+            Outcome::Noted,
+            "not confirmed, turn debug mode off before you leave",
+        );
+        return Ok(());
+    }
+    match open(port) {
+        Ok(device) => {
+            report.check("normal open after debug mode", Outcome::Passed, "");
+            close(&device, person, report);
+            if let Some(ui) = &person.ui {
+                ui.change(|v| {
+                    v.restore_debug = false;
+                    v.hint.clear();
+                });
+            }
+        }
+        Err(error) => report.check(
+            "normal open after debug mode",
+            Outcome::Failed,
+            &error.to_string(),
+        ),
+    }
     Ok(())
 }
