@@ -40,7 +40,7 @@ pub fn drain(events: &Events) -> Vec<Event> {
 /// a timed part. it keeps reading the whole time, because the queue only holds so much and a fast mouse fills it
 /// in a second or two
 pub fn gather(person: &Person, events: &Events, text: &str, wait: Duration) -> Run<Vec<Event>> {
-    person.say(&format!("{text} ({} seconds)", wait.as_secs()).trim_start());
+    person.say(format!("{text} ({} seconds)", wait.as_secs()).trim_start());
     person.go();
     let mut seen = Vec::new();
     collect(person, events, wait, &mut seen)?;
