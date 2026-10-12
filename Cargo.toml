@@ -1,0 +1,10 @@
+[package]
+name = "anybox-testing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anybox = { package = "anybox-rs", path = "../input-bridge", features = ["trace", "mock"] }
+ctrlc = "3"
+serialport = "4.10"
