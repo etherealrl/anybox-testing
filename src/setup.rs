@@ -138,25 +138,26 @@ pub fn connect(
         let candidates: Vec<String> = if setup.family == Family::Ysc {
             ysc_ports(&listed)
         } else {
-            let found = if setup.family == Family::Ferrum {
+            let scanned = if setup.family == Family::Ferrum {
                 Connect::auto()
                     .family(Family::Ferrum)
                     .ferrum_api(setup.ferrum_api)
-                    .find()
+                    .scan()
             } else {
-                anybox::find()
+                anybox::scan()
             };
-            match found {
-                Ok(found) => found
-                    .into_iter()
-                    .filter(|p| p.info.family == setup.family)
-                    .map(|p| p.port)
-                    .collect(),
-                Err(error) => {
-                    report.line(&format!("discovery failed, {error}"));
-                    Vec::new()
+            let mut found = Vec::new();
+            for scanned in scanned {
+                match scanned.result {
+                    Ok(box_found) if box_found.info.family == setup.family => {
+                        found.push(box_found.port)
+                    }
+                    Ok(_) | Err(anybox::Error::NotFound { .. }) => {}
+                    // the reason a box is there but can't be used goes in the report, a port with nothing on it doesn't
+                    Err(error) => report.line(&format!("{} left out, {error}", scanned.port)),
                 }
             }
+            found
         };
         let path = if candidates.len() == 1 {
             candidates[0].clone()
