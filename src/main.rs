@@ -6,6 +6,7 @@ mod ferrum;
 mod gui;
 mod pad;
 mod person;
+mod raw;
 mod report;
 mod setup;
 mod ysc;
@@ -22,6 +23,10 @@ use person::{Person, Run, STOP, Ui};
 use report::{Outcome, Report};
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some(raw::FLAG) {
+        raw::serve();
+        return;
+    }
     let mut args = std::env::args().skip(1);
     let mut scripted = false;
     let mut out = std::env::current_exe()

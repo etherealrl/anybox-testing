@@ -213,7 +213,7 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("anybox sends huge moves, your cursor stays stuck inside this window until it's done. hands off")?
+            .ready("anybox sends huge moves, your cursor will hit the screen edge. hands off until it's done")?
         {
             self.report
                 .check("i16 boundary moves", Outcome::Skipped, "");
@@ -221,11 +221,19 @@ impl Checks<'_> {
         }
         if let Some(ui) = &self.person.ui {
             ui.change(|v| v.require_area = false);
-            ui.confine(true);
         }
-        let ran = self.boundary_moves();
+        let mut counter = self
+            .person
+            .ui
+            .as_ref()
+            .map(|_| crate::raw::Counter::start());
+        if let Some(Err(error)) = &counter {
+            self.report.line(&format!(
+                "no raw input count, only what the window saw: {error}"
+            ));
+        }
+        let ran = self.boundary_moves(counter.as_mut().and_then(|c| c.as_mut().ok()));
         if let Some(ui) = &self.person.ui {
-            ui.confine(false);
             ui.change(|v| v.require_area = v.can_position);
         }
         ran?;
@@ -234,7 +242,7 @@ impl Checks<'_> {
         Ok(())
     }
 
-    fn boundary_moves(&mut self) -> Run<()> {
+    fn boundary_moves(&mut self, mut counter: Option<&mut crate::raw::Counter>) -> Run<()> {
         for axis in [Axis::X, Axis::Y] {
             for amount in [i16::MAX, -i16::MAX, i16::MIN, i16::MAX, 1] {
                 self.person.pad_clear();
@@ -247,10 +255,18 @@ impl Checks<'_> {
                 } else {
                     (0, amount)
                 };
+                if let Some(counter) = counter.as_deref_mut() {
+                    let _ = counter.take();
+                }
                 let at = Instant::now();
                 let call = self.device.move_by(dx, dy);
                 let duration = at.elapsed();
                 self.person.wait(Duration::from_millis(500))?;
+                let raw = match counter.as_deref_mut().map(crate::raw::Counter::take) {
+                    Some(Ok((x, y))) => format!("raw input {x} {y}, "),
+                    Some(Err(error)) => format!("raw input failed {error}, "),
+                    None => String::new(),
+                };
                 self.report.check(
                     &format!("boundary {dx} {dy}"),
                     match &call {
@@ -258,7 +274,7 @@ impl Checks<'_> {
                         Err(error) => failed(error),
                     },
                     &format!(
-                        "call {call:?}, call time {duration:?}, delivery unverified, {}",
+                        "call {call:?}, call time {duration:?}, {raw}{}",
                         self.person
                             .seen()
                             .map(|w| pad::summary(&w))

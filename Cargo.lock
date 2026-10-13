@@ -207,12 +207,13 @@ dependencies = [
 
 [[package]]
 name = "anybox-testing"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anybox-rs",
  "ctrlc",
  "eframe",
  "serialport",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
