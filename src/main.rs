@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anybox::{ClickTiming, Connect, Device, Family, FerrumApi};
+use anybox::{ClickTiming, Device, Family, FerrumApi};
 use setup::ports;
 
 use checks::{Checks, closing};
@@ -258,21 +258,8 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
     };
     person.heading(&format!("{} on {path}", setup.family));
     on_box(device, person, report, "the box's cable to this pc", None)?;
-    if setup.family == Family::Ferrum && setup.ferrum_legacy && !setup.legacy_port.is_empty() {
-        let path = &setup.legacy_port;
-        report.section(&format!("Ferrum legacy on {path}"));
-        match Connect::port(path)
-            .family(Family::Ferrum)
-            .ferrum_api(FerrumApi::Legacy)
-            .open()
-        {
-            Ok(device) => {
-                on_box(device, person, report, "the box's cable to this pc", None)?;
-                ferrum::press_through_close(path, person, report)?;
-            }
-            // whatever is on that port isn't a Ferrum legacy port, so it never gets a raw command
-            Err(error) => report.check("legacy open", Outcome::Failed, &error.to_string()),
-        }
+    if setup.family == Family::Ferrum && setup.ferrum_api == FerrumApi::Legacy {
+        ferrum::press_through_close(&path, person, report)?;
     }
     if setup.family == Family::Ysc {
         if setup.ysc_keys {

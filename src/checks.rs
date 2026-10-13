@@ -141,10 +141,19 @@ pub fn tally(events: &[Event]) -> String {
     }
 }
 
+/// anybox saying it can't is an honest answer about this setup, not a broken check
+fn failed(error: &Error) -> Outcome {
+    if matches!(error, Error::Unsupported { .. }) {
+        Outcome::NotAvailable
+    } else {
+        Outcome::Failed
+    }
+}
+
 fn result(report: &mut Report, name: &str, result: anybox::Result<()>, detail: &str) {
     match result {
         Ok(()) => report.check(name, Outcome::Passed, detail),
-        Err(error) => report.check(name, Outcome::Failed, &format!("{error}")),
+        Err(error) => report.check(name, failed(&error), &format!("{error}")),
     }
 }
 fn asked(report: &mut Report, name: &str, answer: Option<bool>, detail: &str) {
@@ -301,7 +310,7 @@ impl Checks<'_> {
     }
     fn window(&mut self, name: &str, call: anybox::Result<()>, ok: impl FnOnce(&[Seen]) -> bool) {
         if let Err(error) = call {
-            self.report.check(name, Outcome::Failed, &error.to_string());
+            self.report.check(name, failed(&error), &error.to_string());
             return;
         }
         match self.person.seen() {

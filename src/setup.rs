@@ -14,8 +14,7 @@ pub struct Setup {
     pub rate: String,
     pub connector: String,
     pub curves: String,
-    pub ferrum_legacy: bool,
-    pub legacy_port: String,
+    pub ferrum_api: FerrumApi,
     pub ysc_keys: bool,
     pub ysc_debug: bool,
     /// nothing is picked until the person picks it, a default box would connect to the wrong one unnoticed
@@ -33,10 +32,9 @@ impl Default for Setup {
             rate: String::new(),
             connector: String::new(),
             curves: "not sure".into(),
-            ferrum_legacy: false,
-            legacy_port: String::new(),
-            ysc_keys: false,
-            ysc_debug: false,
+            ferrum_api: FerrumApi::Software,
+            ysc_keys: true,
+            ysc_debug: true,
             picked: false,
         }
     }
@@ -68,6 +66,9 @@ pub fn form(person: &Person, report: &mut Report) -> Run<Setup> {
             &setup.rate
         }
     ));
+    if setup.family == Family::Ferrum {
+        report.line(&format!("ferrum api {}", setup.ferrum_api));
+    }
     if setup.family == Family::Ysc {
         report.line(&format!(
             "pc connector {}, curves or interpolation {} (person's settings, not read back)",
@@ -126,6 +127,7 @@ pub fn connect(
     person: &Person,
     report: &mut Report,
 ) -> Run<Option<(Device, String)>> {
+    let mut told_v1 = false;
     loop {
         if let Some(ui) = &person.ui {
             ui.change(|v| {
@@ -142,7 +144,10 @@ pub fn connect(
                 .collect()
         } else {
             let found = if setup.family == Family::Ferrum {
-                Connect::auto().family(Family::Ferrum).find()
+                Connect::auto()
+                    .family(Family::Ferrum)
+                    .ferrum_api(setup.ferrum_api)
+                    .find()
             } else {
                 anybox::find()
             };
@@ -158,6 +163,16 @@ pub fn connect(
                 }
             }
         };
+        let v1 =
+            setup.family == Family::Ysc && candidates.is_empty() && listed.iter().any(is_ch343);
+        if v1 && !told_v1 {
+            told_v1 = true;
+            report.check(
+                "ysc v2 port",
+                Outcome::NotAvailable,
+                "there's no YSC V2 left port (1A86:FE0C TOWMCULEFT), only a CH343 one (1A86:55D3), so this is probably a YSC V1, and anybox doesn't support V1 yet",
+            );
+        }
         let path = if candidates.len() == 1 {
             candidates[0].clone()
         } else {
@@ -166,7 +181,9 @@ pub fn connect(
             } else {
                 "which port?"
             };
-            let hint = if setup.family == Family::Ysc {
+            let hint = if v1 {
+                "this looks like a ysc v1, which anybox doesn't support yet, skip to save the report"
+            } else if setup.family == Family::Ysc {
                 "only the guarded left port is allowed, leave empty to scan again"
             } else {
                 "choose a listed port or type its COM name, leave empty to scan again"
@@ -197,7 +214,7 @@ pub fn connect(
         }
         match Connect::port(&path)
             .family(setup.family)
-            .ferrum_api(FerrumApi::Software)
+            .ferrum_api(setup.ferrum_api)
             .open()
         {
             Ok(device) => return Ok(Some((device, path))),
@@ -216,4 +233,8 @@ pub fn connect(
             }
         }
     }
+}
+
+fn is_ch343(port: &SerialPortInfo) -> bool {
+    matches!(&port.port_type, SerialPortType::UsbPort(usb) if (usb.vid, usb.pid) == (0x1A86, 0x55D3))
 }

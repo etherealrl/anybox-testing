@@ -50,10 +50,7 @@ impl Checks<'_> {
             for (dx, dy, call, seen) in moves {
                 let name = format!("move {dx} {dy} reached the PC");
                 match (call, seen) {
-                    (Err(error), _) => {
-                        self.report
-                            .check(&name, Outcome::Failed, &error.to_string())
-                    }
+                    (Err(error), _) => self.report.check(&name, failed(&error), &error.to_string()),
                     (Ok(()), None) => {
                         self.report
                             .check(&name, Outcome::Noted, "no window in a dry run")
@@ -254,10 +251,9 @@ impl Checks<'_> {
                 self.person.wait(Duration::from_millis(500))?;
                 self.report.check(
                     &format!("boundary {dx} {dy}"),
-                    if call.is_ok() {
-                        Outcome::Noted
-                    } else {
-                        Outcome::Failed
+                    match &call {
+                        Ok(()) => Outcome::Noted,
+                        Err(error) => failed(error),
                     },
                     &format!(
                         "call {call:?}, call time {duration:?}, delivery unverified, {}",

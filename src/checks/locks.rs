@@ -59,8 +59,7 @@ impl Checks<'_> {
         self.person.stop();
         seen.extend(drain(&events));
         if let Err(error) = done.and(unlocked) {
-            self.report
-                .check(&name, Outcome::Failed, &error.to_string());
+            self.report.check(&name, failed(&error), &error.to_string());
             return Ok(());
         }
         let question = if one_way {

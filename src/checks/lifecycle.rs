@@ -53,8 +53,23 @@ impl Checks<'_> {
         if let Some(unplug) = unplug {
             unplug();
         }
-        let disconnected =
-            self.await_event(&events, &mut log, |e| matches!(e, Event::Disconnected))?;
+        let wanted = if self.person.keyboard() {
+            Action::KeyPress
+        } else {
+            Action::Press
+        };
+        // through the Ferrum app the port stays open with the box unplugged, the app just loses its devices, so the
+        // box going and coming back shows up as a change
+        let device = self.device;
+        let gone = |e: &Event| {
+            matches!(e, Event::Disconnected)
+                || (matches!(e, Event::Changed) && !supported(device, wanted))
+        };
+        let back = |e: &Event| {
+            matches!(e, Event::Reconnected)
+                || (matches!(e, Event::Changed) && supported(device, wanted))
+        };
+        let disconnected = self.await_event(&events, &mut log, gone)?;
         let returned = if disconnected {
             self.person.cue("keep it unplugged");
             collect(self.person, &events, Duration::from_secs(3), &mut log)?;
@@ -64,7 +79,7 @@ impl Checks<'_> {
             );
             // the mock restarts immediately, so the reconnect may already be in the drained log
             log.iter().any(|e| matches!(e, Event::Reconnected))
-                || self.await_event(&events, &mut log, |e| matches!(e, Event::Reconnected))?
+                || self.await_event(&events, &mut log, back)?
         } else {
             false
         };
@@ -97,11 +112,6 @@ impl Checks<'_> {
             return Ok(());
         }
         // the box comes back before the device plugged into it does, and until then it can't press or release
-        let wanted = if self.person.keyboard() {
-            Action::KeyPress
-        } else {
-            Action::Press
-        };
         self.person.action(
             "it's back, waiting for your device behind the box. hands off",
             Duration::from_secs(15),

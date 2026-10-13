@@ -69,7 +69,7 @@ impl Checks<'_> {
             tally(&log)
         );
         match pressed.and(released) {
-            Err(error) => self.report.check(name, Outcome::Failed, &error.to_string()),
+            Err(error) => self.report.check(name, failed(&error), &error.to_string()),
             Ok(()) => self.report.check(name, Outcome::Noted, &detail),
         }
         if let Some(seen) = self.person.seen() {
