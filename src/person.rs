@@ -116,6 +116,20 @@ impl Ui {
             ctx.request_repaint();
         }
     }
+
+    /// egui drops raw mouse motion once the pointer leaves the window, so a move bigger than the window only
+    /// counts whole while the pointer is kept inside it
+    pub fn confine(&self, on: bool) {
+        if let Some(ctx) = self.ctx.get() {
+            let grab = if on {
+                eframe::egui::CursorGrab::Confined
+            } else {
+                eframe::egui::CursorGrab::None
+            };
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::CursorGrab(grab));
+            ctx.request_repaint();
+        }
+    }
 }
 
 pub struct Person {

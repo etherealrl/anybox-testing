@@ -213,7 +213,7 @@ impl Checks<'_> {
         }
         if !self
             .person
-            .ready("anybox sends huge moves, your cursor will hit the screen edge. hands off until it's done")?
+            .ready("anybox sends huge moves, your cursor stays stuck inside this window until it's done. hands off")?
         {
             self.report
                 .check("i16 boundary moves", Outcome::Skipped, "");
@@ -221,9 +221,11 @@ impl Checks<'_> {
         }
         if let Some(ui) = &self.person.ui {
             ui.change(|v| v.require_area = false);
+            ui.confine(true);
         }
         let ran = self.boundary_moves();
         if let Some(ui) = &self.person.ui {
+            ui.confine(false);
             ui.change(|v| v.require_area = v.can_position);
         }
         ran?;
