@@ -127,7 +127,6 @@ pub fn connect(
     person: &Person,
     report: &mut Report,
 ) -> Run<Option<(Device, String)>> {
-    let mut told_v1 = false;
     loop {
         if let Some(ui) = &person.ui {
             ui.change(|v| {
@@ -137,11 +136,7 @@ pub fn connect(
         }
         let listed = ports(person, report, "before open");
         let candidates: Vec<String> = if setup.family == Family::Ysc {
-            listed
-                .iter()
-                .filter(|p| is_ysc_left(p))
-                .map(|p| p.port_name.clone())
-                .collect()
+            ysc_ports(&listed)
         } else {
             let found = if setup.family == Family::Ferrum {
                 Connect::auto()
@@ -163,16 +158,6 @@ pub fn connect(
                 }
             }
         };
-        let v1 =
-            setup.family == Family::Ysc && candidates.is_empty() && listed.iter().any(is_ch343);
-        if v1 && !told_v1 {
-            told_v1 = true;
-            report.check(
-                "ysc v2 port",
-                Outcome::NotAvailable,
-                "there's no YSC V2 left port (1A86:FE0C TOWMCULEFT), only a CH343 one (1A86:55D3), so this is probably a YSC V1, and anybox doesn't support V1 yet",
-            );
-        }
         let path = if candidates.len() == 1 {
             candidates[0].clone()
         } else {
@@ -181,10 +166,8 @@ pub fn connect(
             } else {
                 "which port?"
             };
-            let hint = if v1 {
-                "this looks like a ysc v1, which anybox doesn't support yet, skip to save the report"
-            } else if setup.family == Family::Ysc {
-                "only the guarded left port is allowed, leave empty to scan again"
+            let hint = if setup.family == Family::Ysc {
+                "only the ysc v2 left port, or a ch343 port when there's no v2, leave empty to scan again"
             } else {
                 "choose a listed port or type its COM name, leave empty to scan again"
             };
@@ -201,15 +184,13 @@ pub fn connect(
         if path.is_empty() {
             continue;
         }
-        if setup.family == Family::Ysc
-            && !listed.iter().any(|p| p.port_name == path && is_ysc_left(p))
-        {
+        if setup.family == Family::Ysc && !ysc_ports(&listed).contains(&path) {
             report.check(
                 "port guard",
                 Outcome::Noted,
-                "the selected port is not the YSC left command port",
+                "the selected port is neither the YSC V2 left port nor a CH343 port with no V2 around",
             );
-            person.answer("that isn't the ysc left port, scan again", "", "")?;
+            person.answer("that isn't a ysc port, scan again", "", "")?;
             continue;
         }
         match Connect::port(&path)
@@ -233,6 +214,23 @@ pub fn connect(
             }
         }
     }
+}
+
+/// the V2 left port, or when there's none, the CH343 ports a V1 could be behind
+fn ysc_ports(listed: &[SerialPortInfo]) -> Vec<String> {
+    let v2: Vec<String> = listed
+        .iter()
+        .filter(|p| is_ysc_left(p))
+        .map(|p| p.port_name.clone())
+        .collect();
+    if !v2.is_empty() {
+        return v2;
+    }
+    listed
+        .iter()
+        .filter(|p| is_ch343(p))
+        .map(|p| p.port_name.clone())
+        .collect()
 }
 
 fn is_ch343(port: &SerialPortInfo) -> bool {

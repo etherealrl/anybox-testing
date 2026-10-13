@@ -235,3 +235,32 @@ pub fn debug_mode(port: &str, person: &Person, report: &mut Report) -> Run<()> {
     }
     Ok(())
 }
+
+/// a V1 sits behind the same chip as a MAKCU, so this asks it the way anybox's MAKCU search would. whatever comes back
+/// (and the trace) says whether a search with no family could ever look for a V1 safely
+pub fn asked_as_makcu(port: &str, person: &Person, report: &mut Report) -> Run<()> {
+    let name = "the v1 asked as a makcu";
+    if !person.ready("anybox asks the box like it would ask a MAKCU, hands off the whole time")? {
+        report.check(name, Outcome::Skipped, "");
+        return Ok(());
+    }
+    person.action("hands off, don't touch anything", Duration::from_secs(1));
+    match Connect::port(port).family(Family::MakcuV4).open() {
+        Ok(device) => {
+            let info = format!("{:?}", device.snapshot().info);
+            let closed = device.close();
+            report.check(
+                name,
+                Outcome::Noted,
+                &format!("it opened as a MAKCU, {info}, close {closed:?}"),
+            );
+        }
+        Err(error) => report.check(
+            name,
+            Outcome::Noted,
+            &format!("{error}, the trace shows what the box said"),
+        ),
+    }
+    person.stop();
+    Ok(())
+}

@@ -14,7 +14,7 @@ cargo run --release
 
 pick what you're testing from the list (the box, the way into it on a Ferrum, and whether a mouse or a keyboard is plugged into it), then the device name and its rate if you know it. close games and keep the window in front, because the tests send clicks and keys
 
-the tests cover output, physical input, locks, event receivers, reconnect, and close. the extra ysc checks are on by default under "extra checks", and the window tells you when to unplug the box's cable to this pc
+the tests cover output, physical input, locks, event receivers, reconnect, and close. the extra ysc checks are on by default under "extra checks". a ysc V2 is found on its left port, and when there's no V2 a CH343 port gets tried as a V1. the window tells you when to unplug the box's cable to this pc
 
 if anything stays held or locked, unplug the box and plug it back in. stop run or closing the window lets the worker close the connection and save first
 

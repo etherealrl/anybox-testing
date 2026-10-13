@@ -71,3 +71,26 @@ pub fn press_through_close(port: &str, person: &Person, report: &mut Report) -> 
     person.stop();
     Ok(())
 }
+
+/// the app's Serial API tab has presets that make its port look like another chip. what Windows then lists for the
+/// port tells us whether anybox could ever mistake it for a CH343 box or the box's own CP210x port
+pub fn presets(person: &Person, report: &mut Report) -> Run<()> {
+    let name = "port list with each preset";
+    if !person.ready("last thing, you click each port preset in the ferrum app's Serial API tab and we list the ports")? {
+        report.check(name, Outcome::Skipped, "");
+        return Ok(());
+    }
+    for preset in ["CH340", "CH343", "CH347", "CP2102"] {
+        if person.confirm(&format!(
+            "click the {preset} preset in the ferrum app's Serial API tab"
+        ))? {
+            person.wait(Duration::from_secs(2))?;
+            crate::setup::ports(person, report, &format!("with the {preset} preset"));
+        } else {
+            report.check(name, Outcome::Skipped, &format!("{preset} not clicked"));
+        }
+    }
+    report.check(name, Outcome::Noted, "the port lists are above");
+    person.cue("put the preset back to the one you had before");
+    Ok(())
+}

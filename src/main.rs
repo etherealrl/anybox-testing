@@ -257,9 +257,13 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
         return Ok(());
     };
     person.heading(&format!("{} on {path}", setup.family));
+    let v1 = device.snapshot().info.model.as_deref() == Some("YSC 8K V1");
     on_box(device, person, report, "the box's cable to this pc", None)?;
     if setup.family == Family::Ferrum && setup.ferrum_api == FerrumApi::Legacy {
         ferrum::press_through_close(&path, person, report)?;
+    }
+    if setup.family == Family::Ferrum && setup.ferrum_api == FerrumApi::Software {
+        ferrum::presets(person, report)?;
     }
     if setup.family == Family::Ysc {
         if setup.ysc_keys {
@@ -280,6 +284,9 @@ fn run(person: &Person, report: &mut Report) -> Run<()> {
         } else {
             report.check("debug mode diagnostic", Outcome::Skipped, "");
         }
+    }
+    if v1 {
+        ysc::asked_as_makcu(&path, person, report)?;
     }
     ports(person, report, "at the end");
     Ok(())
