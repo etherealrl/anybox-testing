@@ -131,8 +131,6 @@ pub fn draw(ui: &mut egui::Ui, setup: &mut Setup) -> bool {
         ui.add(egui::TextEdit::singleline(&mut setup.rate).hint_text("not sure"));
     }
     if setup.family == Family::Ysc {
-        ui.label("the ysc has more than one usb port, which one is the cable to this pc plugged into? (what's printed next to it, or left, middle, right)");
-        ui.text_edit_singleline(&mut setup.connector);
         ui.label("is interpolation or a movement curve turned on in the ysc app? they change how moves come out");
         ui.horizontal(|ui| {
             for choice in ["yes", "no", "not sure"] {

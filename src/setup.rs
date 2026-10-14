@@ -12,7 +12,6 @@ pub struct Setup {
     pub name: String,
     pub khz: bool,
     pub rate: String,
-    pub connector: String,
     pub curves: String,
     pub ferrum_api: FerrumApi,
     pub ysc_keys: bool,
@@ -30,7 +29,6 @@ impl Default for Setup {
             name: String::new(),
             khz: false,
             rate: String::new(),
-            connector: String::new(),
             curves: "not sure".into(),
             ferrum_api: FerrumApi::Software,
             ysc_keys: true,
@@ -71,8 +69,8 @@ pub fn form(person: &Person, report: &mut Report) -> Run<Setup> {
     }
     if setup.family == Family::Ysc {
         report.line(&format!(
-            "pc connector {}, curves or interpolation {} (person's settings, not read back)",
-            setup.connector, setup.curves
+            "curves or interpolation {} (the person's answer, not read back)",
+            setup.curves
         ));
     }
     report.line("other attached devices and 125/1000/8000 hz configurations not checked");

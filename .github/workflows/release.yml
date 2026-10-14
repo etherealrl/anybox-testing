@@ -1,8 +1,10 @@
 name: release
 
-# the exe on a release is built here from the tagged source, so what you run is exactly what you can read
+# the exe on a release is built here from the tagged source, so what you run is exactly what you can read. a push
+# to main builds too, because a tag can only read the cache main made, not the one the last tag made
 on:
   push:
+    branches: [main]
     tags: ["v*"]
 
 permissions:
@@ -13,9 +15,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo test --locked
+      - uses: Swatinem/rust-cache@v2
+      # tested in release, so the build after it reuses everything the tests compiled
+      - run: cargo test --release --locked
       - run: cargo build --release --locked
-      - shell: bash
+      - if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" target/release/anybox-testing.exe --title "$GITHUB_REF_NAME" --notes "built by this workflow from $GITHUB_SHA"
