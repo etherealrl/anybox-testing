@@ -192,9 +192,9 @@ dependencies = [
 
 [[package]]
 name = "anybox-rs"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "737dd7f4e086e1954750000f1b83b32477bd2327a49e3eec2c273e4cbc4abdfd"
+checksum = "62a0f5bd9d6a6503eb776687de2b1a7bf3e74739ac1d188df5d9e641e12a9e79"
 dependencies = [
  "libc",
  "medius",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "anybox-testing"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anybox-rs",
  "ctrlc",

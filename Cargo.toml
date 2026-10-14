@@ -1,11 +1,11 @@
 [package]
 name = "anybox-testing"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 publish = false
 
 [dependencies]
-anybox = { package = "anybox-rs", version = "0.7.0", features = ["trace", "mock"] }
+anybox = { package = "anybox-rs", version = "0.7.1", features = ["trace", "mock"] }
 ctrlc = "3"
 eframe = "0.36.2"
 serialport = "4.10"
