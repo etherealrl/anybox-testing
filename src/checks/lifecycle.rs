@@ -6,9 +6,18 @@ impl Checks<'_> {
             ui.change(|v| v.reconnect_failed = false);
         }
         let name = "unplug and replug";
-        if !self.person.ready(
-            "anybox holds right and locks left, hands off until it tells you to unplug the box",
-        )? {
+        // with no pc mouse the cursor can't be kept in the test area, so the click could land anywhere
+        let holds = self.person.can_position() && supported(self.device, Action::Press);
+        let locks = supported(self.device, Action::LockButton);
+        let what = match (holds, locks) {
+            (true, true) => "anybox holds right and locks left, ",
+            (true, false) => "anybox holds right, ",
+            (false, true) => "anybox locks left, ",
+            (false, false) => "",
+        };
+        if !self.person.ready(&format!(
+            "{what}hands off until it tells you to unplug the box"
+        ))? {
             self.report.check(name, Outcome::Skipped, "");
             return Ok(());
         }
@@ -18,8 +27,7 @@ impl Checks<'_> {
             "hands off, don't touch anything",
             Duration::from_millis(500),
         );
-        // with no pc mouse the cursor can't be kept in the test area, so the click could land anywhere
-        let held = if self.person.can_position() {
+        let held = if holds {
             self.device.press(Button::Right)
         } else {
             Err(anybox::Error::Closed)
@@ -44,8 +52,7 @@ impl Checks<'_> {
                 "windows state recorded"
             },
         );
-        let locked = supported(self.device, Action::LockButton)
-            .then(|| self.device.lock_button(Button::Left));
+        let locked = locks.then(|| self.device.lock_button(Button::Left));
         self.person.action(
             "unplug the box's cable to this pc now",
             Duration::from_secs(60),
@@ -93,12 +100,14 @@ impl Checks<'_> {
             if let Some(ui) = &self.person.ui {
                 ui.change(|v| v.reconnect_failed = true);
             }
-            result(
-                self.report,
-                "release right after reconnect failure",
-                self.device.release(Button::Right),
-                "",
-            );
+            if holds {
+                result(
+                    self.report,
+                    "release right after reconnect failure",
+                    self.device.release(Button::Right),
+                    "",
+                );
+            }
             if locked.is_some() {
                 result(
                     self.report,
@@ -139,12 +148,14 @@ impl Checks<'_> {
                 state == Some(true)
             ),
         );
-        result(
-            self.report,
-            "release right after reconnect",
-            self.device.release(Button::Right),
-            "",
-        );
+        if holds {
+            result(
+                self.report,
+                "release right after reconnect",
+                self.device.release(Button::Right),
+                "",
+            );
+        }
         if state == Some(true) && self.person.can_position() {
             self.person.pad_clear();
             let cleared = self.acquire(&events, "click right once to clear it", |_, window| {
